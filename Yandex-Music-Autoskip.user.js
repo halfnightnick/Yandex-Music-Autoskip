@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Yandex-Music-Autoskip
+// @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
 // @version      33.0
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
