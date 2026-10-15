@@ -30,6 +30,6 @@
 
 2. [Разрешите выполнение userscript’ов и режим разработчика](https://www.tampermonkey.net/faq.php?locale=ru#Q209) в вашем браузере.
 3. Нажмите на ссылку ниже, чтобы установить скрипт:
-   <br>**[Установить скрипт](https://github.com/frostbittenbull/Yandex-Music-Plus-Unlocker-Downloader/raw/refs/heads/main/Yandex-Music-Plus-Unlocker-Downloader.user.js)**
+   <br>**[Установить скрипт](https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js)**
    
 4. В открывшемся окне Tampermonkey нажмите **«Установить»** (Install).
