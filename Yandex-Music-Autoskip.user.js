@@ -46,7 +46,7 @@
         let w = Math.floor(d / 7), mo = Math.floor(d / 30.44), y = Math.floor(d / 365.25);
         return mo < 1 ? `${w} ${pl(w, 'неделю', 'недели', 'недель')} назад` : y < 1 ? `${mo} ${pl(mo, 'месяц', 'месяца', 'месяцев')} назад` : `${y} ${pl(y, 'год', 'года', 'лет')} назад`;
     }
-    function getCol(ts) { if (!ts) return '#8a2be2'; let d = (Date.now() - ts) / 86400000; return d < 10 ? '#ff3333' : d < 20 ? '#ff9900' : d < 30 ? '#ffff00' : d < 90 ? '#00ff00' : d < 180 ? '#00ffff' : d < 360 ? '#0066ff' : '#8a2be2'; }
+    function getCol(ts) { if (!ts) return '#8a2be2'; let d = (Date.now() - ts) / 86400000; return d < 11 ? '#ff3333' : d < 20 ? '#ff9900' : d < 30 ? '#ffff00' : d < 90 ? '#00ff00' : d < 180 ? '#00ffff' : d < 360 ? '#0066ff' : '#8a2be2'; }
     const S_COMP = `position:fixed!important;right:0!important;background:rgba(20,20,20,0.85)!important;backdrop-filter:blur(4px)!important;border-radius:6px!important;z-index:2147483647!important;font:10px system-ui,sans-serif!important;box-shadow:-1px 1px 5px rgba(0,0,0,0.4)!important;box-sizing:border-box!important;line-height:1.2!important;height:18px!important;padding:2px 8px!important;display:flex!important;align-items:center!important;`;
     const S_SKIP = S_COMP + `top:0!important;width:280px!important;cursor:default!important;user-select:none!important;pointer-events:auto!important;color:rgba(255,255,255,0.7)!important;`;
     const S_MAIN = S_COMP + `pointer-events:none!important;justify-content:flex-end!important;color:rgba(255,255,255,0.85)!important;white-space:nowrap!important;`;
