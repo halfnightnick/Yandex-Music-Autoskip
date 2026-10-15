@@ -4,7 +4,7 @@
 // @version      33.0
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
-// @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки, отображает, когда трек играл последний раз, и, в зависимости от желания пользователя, автоматически скипает треки, игравшие в последние X дней (X можно выбрать в диапазоне от 3 до 30 дней, по умолчанию 10)
+// @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
 // @author       halfnightnick
 // @icon         https://music.yandex.ru/favicon.svg
 // @icon64       https://music.yandex.ru/favicon.svg
