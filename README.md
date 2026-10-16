@@ -22,7 +22,9 @@
 2. Если понадобится переустановить браузер, чтобы история прослушиваний сохранилась, нужно зайти в панель управления Tampermonkey:
 
 <img width="375" height="375" alt="YM-Export-Import0" src="https://github.com/user-attachments/assets/d62c06bc-7491-4993-97fe-479b83b7ae1e" />
-\
+
+
+
 Экспортировать историю до переустановки, а после переустановки браузера импортировать её обратно:
 
 <img width="1920" height="991" alt="YM-Export-Import" src="https://github.com/user-attachments/assets/1b84ae81-04da-45c6-94a1-13d3ce34497e" />
