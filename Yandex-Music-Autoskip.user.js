@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      37.8
+// @version      37.9
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -191,21 +191,23 @@
 
             .ym-btn { background:transparent!important; border:none!important; cursor:pointer!important; width:100%!important; height:100%!important; padding:0!important; }
 
-            #ym-rng { -webkit-appearance:none!important; background:#555!important; width:45px!important; height:2px!important; cursor:pointer!important; margin:0 6px!important; flex-shrink:0!important; outline:none!important; }
+            #ym-rng { -webkit-appearance:none!important; background:#555!important; width:56px!important; height:2px!important; cursor:pointer!important; flex-shrink:0!important; outline:none!important; }
             #ym-rng::-webkit-slider-thumb { -webkit-appearance:none!important; width:6px!important; height:6px!important; border-radius:50%!important; background:#fff!important; }
+
+            #ym-range-val {
+               width: 25px !important;       /* Фиксированная ширина подстроки "XX дн." */
+               min-width: 25px !important;   /* Защита от сжатия во флекс-контейнере */
+            }
         `;
         document.head.appendChild(style);
     }
 
     function simulateHumanKeyPress() {
-        // Создаем события нажатия
         const downEvent = new KeyboardEvent('keydown', cachedKeyEvent);
         const upEvent = new KeyboardEvent('keyup', cachedKeyEvent);
 
-        // Нажимаем клавишу
         window.dispatchEvent(downEvent);
 
-        // Отпускаем клавишу через случайную "человеческую" паузу (40-120 мс)
         setTimeout(() => {
             window.dispatchEvent(upEvent);
         }, Math.random() * 80 + 40);
@@ -232,11 +234,8 @@
 
                 let delay;
                 if (skipsCount > 5) {
-                    // Каскад скипов: имитируем, что пользователь стал кликать чуть медленнее
-                    // Диапазон: 1.3 – 1.9 секунды (Безопасно для рекомендаций, хаотично для бана)
                     delay = Math.random() * 600 + 1300;
                 } else {
-                    // Обычный пропуск: быстрая реакция человека (0.6 – 1.2 секунды)
                     delay = Math.random() * 600 + 600;
                 }
 
