@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      38.0
+// @version      38.1
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -439,7 +439,7 @@
     function onAudioPlayEvent(event) {
         if (isReadyToCheck && event.target.dataset.ymSkipping !== "true") {
             isReadyToCheck = false;
-            setTimeout(checkAndTriggerSkip, 50);
+            checkAndTriggerSkip();
         }
     }
 
