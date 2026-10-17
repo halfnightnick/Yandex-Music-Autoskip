@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      37.9
+// @version      38.0
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -125,7 +125,8 @@
     }
 
     function importHistoryFromFile(event) {
-        let file = event.target.files;
+        // Исправлено: берем первый файл из списка [0]
+        let file = event.target.files[0];
         if (!file || !db) return;
 
         let reader = new FileReader();
@@ -135,17 +136,46 @@
                 let transaction = db.transaction(['history'], 'readwrite');
                 let store = transaction.objectStore('history');
 
+                // Очищаем существующую базу перед импортом новых данных
+                store.clear();
+
                 for (let key in importedData) {
                     store.put(importedData[key], key);
                 }
-                alert('История прослушиваний успешно импортирована!');
-                if (currentTrackKey) onTrackChanged(currentTrackKey.split(' — '), currentTrackKey.split(' — '), true);
+
+                // Логика визуального отклика выполняется после успешной записи всех данных
+                transaction.oncomplete = function() {
+                    // Эффект зеленого свечения для контейнера кнопки импорта на 1 секунду
+                    let impBox = document.getElementById('ym-autoskip-imp-box');
+                    if (impBox) {
+                        impBox.style.setProperty('border', '1px solid #00ff00', 'important');
+                        impBox.style.setProperty('box-shadow', '0 0 15px #00ff00, inset 0 0 6px #00ff00', 'important');
+                        impBox.style.setProperty('color', '#00ff00', 'important');
+
+                        let impBtn = impBox.querySelector('.ym-btn');
+                        if (impBtn) impBtn.style.setProperty('color', '#00ff00', 'important');
+
+                        // Возвращаем исходный белый стиль через 1000 мс (1 секунда)
+                        setTimeout(() => {
+                            impBox.style.borderColor = '#ffffff';
+                            impBox.style.boxShadow = '-1px 1px 5px rgba(0,0,0,0.4)';
+                            impBox.style.color = '#ffffff';
+                            if (impBtn) impBtn.style.setProperty('color', '#ffffff', 'important');
+                        }, 1000);
+                    }
+
+                    if (currentTrackKey) onTrackChanged(currentTrackKey.split(' — '), currentTrackKey.split(' — '), true);
+                };
+
             } catch(err) {
                 alert('Ошибка: Файл поврежден или имеет неверный формат.');
             }
         };
+        // Теперь передается правильный объект файла (Blob)
         reader.readAsText(file);
+        event.target.value = ''; // Сбрасываем инпут, чтобы можно было загрузить тот же файл повторно
     }
+
 
     function getStatusColor(timestamp) {
         if (!timestamp) return '#8a2be2';
@@ -176,28 +206,25 @@
                 line-height: 1 !important;
             }
 
-            .ym-base { position:fixed!important; background:rgba(20,20,20,0.85)!important; backdrop-filter:blur(4px)!important; border-radius:6px!important; z-index:2147483647!important; box-shadow:-1px 1px 5px rgba(0,0,0,0.4)!important; box-sizing:border-box!important; height:18px!important; padding:2px 8px!important; }
+            .ym-base { position:fixed!important; background:rgba(20,20,20,0.85)!important; backdrop-filter:blur(4px)!important; border-radius:6px!important; z-index:2147483647!important; box-shadow:-1px 1px 5px rgba(0,0,0,0.4)!important; box-sizing:border-box!important; height:18px!important; padding:2px 3px!important; }
 
             /* Этаж 1: Окошко настроек автоскипа прижато к правому краю экрана */
-            .ym-settings { top:0px!important; right:0px!important; width:auto!important; max-width:287px!important; cursor:default!important; user-select:none!important; pointer-events:auto!important; gap:5px!important; }
+            .ym-settings { top:0px!important; right:0px!important; width:auto!important; max-width:287px!important; cursor:default!important; user-select:none!important; pointer-events:auto!important; gap:3px!important; }
 
             /* Этаж 2 (слева): Окошко статуса трека, смещенное под ширину кнопок */
-            .ym-notify { top:19px!important; right:46px!important; width:auto!important; max-width:241px!important; pointer-events:none!important; white-space:nowrap!important; }
+            .ym-notify { top:19px!important; right:42px!important; width:auto!important; max-width:245px!important; pointer-events:none!important; white-space:nowrap!important; }
 
             /* Правая вертикальная колонка кнопок у кромки экрана */
-            .ym-btn-box { right:0px!important; width:45px!important; padding:0!important; border: 1px solid #ffffff !important;}
+            .ym-btn-box { right:0px!important; width:41px!important; padding:0!important; border: 1px solid #ffffff !important;}
             .ym-btn-exp { top:19px!important; }
             .ym-btn-imp { top:38px!important; }
 
             .ym-btn { background:transparent!important; border:none!important; cursor:pointer!important; width:100%!important; height:100%!important; padding:0!important; }
 
-            #ym-rng { -webkit-appearance:none!important; background:#555!important; width:56px!important; height:2px!important; cursor:pointer!important; flex-shrink:0!important; outline:none!important; }
+            #ym-rng { -webkit-appearance:none!important; background:#555!important; width:100px!important; height:2px!important; cursor:pointer!important; flex-shrink:0!important; outline:none!important; }
             #ym-rng::-webkit-slider-thumb { -webkit-appearance:none!important; width:6px!important; height:6px!important; border-radius:50%!important; background:#fff!important; }
 
-            #ym-range-val {
-               width: 25px !important;       /* Фиксированная ширина подстроки "XX дн." */
-               min-width: 25px !important;   /* Защита от сжатия во флекс-контейнере */
-            }
+            #ym-range-val { width: 25px !important; min-width: 25px !important; }
         `;
         document.head.appendChild(style);
     }
@@ -265,7 +292,7 @@
         checkbox.checked = GM_getValue('ym_autoskip_enabled', true);
 
         let labelText = document.createElement('span');
-        labelText.innerText = 'Скип треков, игравших в последние';
+        labelText.innerText = 'Скипать игравшее в последние';
 
         checkbox.addEventListener('change', (e) => {
             GM_setValue('ym_autoskip_enabled', e.target.checked);
@@ -280,8 +307,8 @@
         let rangeInput = document.createElement('input');
         rangeInput.type = 'range';
         rangeInput.id = 'ym-rng';
-        rangeInput.min = '3';
-        rangeInput.max = '30';
+        rangeInput.min = '1';
+        rangeInput.max = '90';
         let currentDaysSetting = GM_getValue('ym_autoskip_days', 10);
         rangeInput.value = currentDaysSetting;
 
