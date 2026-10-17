@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      37.7
+// @version      37.8
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -158,26 +158,38 @@
         if (daysPassed < 360) return '#0066ff';
         return '#8a2be2';
     }
-    // --- ОБНОВЛЕННЫЙ ТРЕХЭТАЖНЫЙ CSS МОДУЛЬ С ПРИВЯЗКОЙ К ПРАВОМУ КРАЮ ---
+    // --- ФИНАЛЬНЫЙ CSS МОДУЛЬ: Кристально белый цвет текста (#fff) для всех элементов ---
     function injectStyles() {
         if (document.getElementById('ym-autoskip-styles')) return;
         let style = document.createElement('style');
         style.id = 'ym-autoskip-styles';
         style.innerText = `
-            .ym-base { position:fixed!important; background:rgba(20,20,20,0.85)!important; backdrop-filter:blur(4px)!important; border-radius:6px!important; z-index:2147483647!important; font:10px system-ui,sans-serif!important; box-shadow:-1px 1px 5px rgba(0,0,0,0.4)!important; box-sizing:border-box!important; line-height:1.2!important; height:18px!important; padding:2px 8px!important; display:flex!important; align-items:center!important; }
+            /* Сквозные правила для абсолютно всех текстовых элементов: 9px, центрирование и 100% БЕЛЫЙ ЦВЕТ */
+            .ym-base, .ym-base span, .ym-base label, .ym-base button, #ym-range-val {
+                font: normal 9px system-ui, -apple-system, sans-serif !important;
+                color: #ffffff !important;
+                text-align: center !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                margin: 0 !important;
+                line-height: 1 !important;
+            }
 
-            /* ЭТАЖ 1 (top: 0px): Окошко автоскипа (280px) прижато к правому краю экрана (right: 0px) */
-            .ym-settings { top:0px!important; right:0px!important; width:280px!important; cursor:default!important; user-select:none!important; pointer-events:auto!important; color:rgba(255,255,255,0.7)!important; }
+            .ym-base { position:fixed!important; background:rgba(20,20,20,0.85)!important; backdrop-filter:blur(4px)!important; border-radius:6px!important; z-index:2147483647!important; box-shadow:-1px 1px 5px rgba(0,0,0,0.4)!important; box-sizing:border-box!important; height:18px!important; padding:2px 8px!important; }
 
-            /* ЭТАЖ 2 (top: 19px, слева): Окошко статуса трека, смещенное влево под ширину кнопок */
-            .ym-notify { top:19px!important; right:46px!important; width:auto!important; max-width:400px!important; pointer-events:none!important; color:rgba(255,255,255,0.85)!important; white-space:nowrap!important; }
+            /* Этаж 1: Окошко настроек автоскипа прижато к правому краю экрана */
+            .ym-settings { top:0px!important; right:0px!important; width:auto!important; max-width:287px!important; cursor:default!important; user-select:none!important; pointer-events:auto!important; gap:5px!important; }
 
-            /* ПРАВАЯ ВЕРТИКАЛЬНАЯ КОЛОНКА (right: 0px): Кнопки стоят строго у кромки экрана друг под другом */
-            .ym-btn-box { right:0px!important; width:45px!important; justify-content:center!important; padding:0!important; }
-            .ym-btn-exp { top:19px!important; }  /* Кнопка Экспорт находится на ЭТАЖЕ 2 */
-            .ym-btn-imp { top:38px!important; }  /* Кнопка Импорт находится на ЭТАЖЕ 3 */
+            /* Этаж 2 (слева): Окошко статуса трека, смещенное под ширину кнопок */
+            .ym-notify { top:19px!important; right:46px!important; width:auto!important; max-width:241px!important; pointer-events:none!important; white-space:nowrap!important; }
 
-            .ym-btn { background:transparent!important; color:#fff!important; border:none!important; cursor:pointer!important; font-size:9px!important; font-weight:bold!important; width:100%!important; height:100%!important; text-align:center!important; padding:0!important; margin:0!important; display:flex!important; align-items:center!important; justify-content:center!important; }
+            /* Правая вертикальная колонка кнопок у кромки экрана */
+            .ym-btn-box { right:0px!important; width:45px!important; padding:0!important; border: 1px solid #ffffff !important;}
+            .ym-btn-exp { top:19px!important; }
+            .ym-btn-imp { top:38px!important; }
+
+            .ym-btn { background:transparent!important; border:none!important; cursor:pointer!important; width:100%!important; height:100%!important; padding:0!important; }
 
             #ym-rng { -webkit-appearance:none!important; background:#555!important; width:45px!important; height:2px!important; cursor:pointer!important; margin:0 6px!important; flex-shrink:0!important; outline:none!important; }
             #ym-rng::-webkit-slider-thumb { -webkit-appearance:none!important; width:6px!important; height:6px!important; border-radius:50%!important; background:#fff!important; }
@@ -185,14 +197,26 @@
         document.head.appendChild(style);
     }
 
+    function simulateHumanKeyPress() {
+        // Создаем события нажатия
+        const downEvent = new KeyboardEvent('keydown', cachedKeyEvent);
+        const upEvent = new KeyboardEvent('keyup', cachedKeyEvent);
+
+        // Нажимаем клавишу
+        window.dispatchEvent(downEvent);
+
+        // Отпускаем клавишу через случайную "человеческую" паузу (40-120 мс)
+        setTimeout(() => {
+            window.dispatchEvent(upEvent);
+        }, Math.random() * 80 + 40);
+    }
+
     function skipTrk() {
         skipsCount++;
         for (let i = 0; i < liveAudioCollection.length; i++) { liveAudioCollection[i].dataset.ymSkipping = "true"; }
-        window.dispatchEvent(new KeyboardEvent('keydown', cachedKeyEvent));
-        window.dispatchEvent(new KeyboardEvent('keyup', cachedKeyEvent));
+        simulateHumanKeyPress();
     }
 
-    // Синхронно красит рамки верхнего окна и обеих боковых независимых кнопок
     function updateBorders() {
         let isEnabled = GM_getValue('ym_autoskip_enabled', true);
         let borderStyle = `1px solid ${isEnabled ? '#ffffff' : '#333333'}`;
@@ -200,19 +224,26 @@
         let settingsBox = document.getElementById('ym-autoskip-box');
         if (settingsBox) settingsBox.style.setProperty('border', borderStyle, 'important');
 
-        let expBox = document.getElementById('ym-autoskip-exp-box');
-        if (expBox) expBox.style.setProperty('border', borderStyle, 'important');
-
-        let impBox = document.getElementById('ym-autoskip-imp-box');
-        if (impBox) impBox.style.setProperty('border', borderStyle, 'important');
     }
 
     function checkAndTriggerSkip() {
         if (lastPlayedTimestamp && GM_getValue('ym_autoskip_enabled', true)) {
             if (((Date.now() - lastPlayedTimestamp) / 86400000) < GM_getValue('ym_autoskip_days', 10)) {
-                setTimeout(skipTrk, skipsCount > 10 ? Math.random() * 100 + 1500 : Math.random() * 10 + 50);
-                skipsCount = skipsCount > 10 ? 0 : skipsCount;
-            } else { skipsCount = 0; }
+
+                let delay;
+                if (skipsCount > 5) {
+                    // Каскад скипов: имитируем, что пользователь стал кликать чуть медленнее
+                    // Диапазон: 1.3 – 1.9 секунды (Безопасно для рекомендаций, хаотично для бана)
+                    delay = Math.random() * 600 + 1300;
+                } else {
+                    // Обычный пропуск: быстрая реакция человека (0.6 – 1.2 секунды)
+                    delay = Math.random() * 600 + 600;
+                }
+
+                setTimeout(skipTrk, delay);
+            } else {
+                skipsCount = 0;
+            }
         }
     }
 
@@ -222,17 +253,16 @@
 
         injectStyles();
 
-        // 1. Создаем верхнее окно настроек (Этаж 1, справа у края)
         box = document.createElement('div');
         box.id = 'ym-autoskip-box';
         box.className = 'ym-base ym-settings';
 
         let label = document.createElement('label');
-        label.style.cssText = 'display:flex!important;align-items:center!important;gap:5px!important;cursor:pointer!important;margin:0!important;flex-shrink:0!important;';
+        label.style.cssText = 'cursor:pointer!important; gap:4px!important;';
 
         let checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
-        checkbox.style.cssText = 'margin:0!important;width:11px!important;height:11px!important;';
+        checkbox.style.cssText = 'margin:0!important;width:11px!important;height:11px!important;cursor:pointer!important;flex-shrink:0!important;';
         checkbox.checked = GM_getValue('ym_autoskip_enabled', true);
 
         let labelText = document.createElement('span');
@@ -257,8 +287,9 @@
         rangeInput.value = currentDaysSetting;
 
         let rangeValueDisplay = document.createElement('span');
+        rangeValueDisplay.id = 'ym-range-val';
         rangeValueDisplay.innerText = `${currentDaysSetting} дн.`;
-        rangeValueDisplay.style.cssText = 'font-weight:bold!important;color:#fff!important;margin-left:auto!important;flex-shrink:0!important;';
+        rangeValueDisplay.style.cssText = 'color:#fff!important; margin-left:auto!important; flex-shrink:0!important;';
 
         rangeInput.addEventListener('input', (e) => {
             GM_setValue('ym_autoskip_days', parseInt(e.target.value, 10));
@@ -270,7 +301,6 @@
         box.appendChild(rangeValueDisplay);
         document.body.appendChild(box);
 
-        // 2. Создаем окошко-кнопку "Экспорт" (Этаж 2, у кромки экрана)
         let expBox = document.createElement('div');
         expBox.id = 'ym-autoskip-exp-box';
         expBox.className = 'ym-base ym-btn-box ym-btn-exp';
@@ -281,7 +311,6 @@
         expBox.appendChild(expBtn);
         document.body.appendChild(expBox);
 
-        // 3. Создаем окошко-кнопку "Импорт" (Этаж 3, под Экспортом)
         let impBox = document.createElement('div');
         impBox.id = 'ym-autoskip-imp-box';
         impBox.className = 'ym-base ym-btn-box ym-btn-imp';
@@ -324,13 +353,18 @@
 
         notifyBox.innerText = text;
         let color = getStatusColor(timestamp);
-        let borderStyle = `border:1px solid ${isTrackSaved ? '#ffffff' : color}!important;`;
+        let baseStyleAddition = isSavedGreen ? 'border:1px solid #00ff00!important;box-shadow:0 0 15px #00ff00,inset 0 0 6px #00ff00!important;color:#00ff00!important;' : `border:1px solid ${isTrackSaved ? '#ffffff' : color}!important;`;
+
+        notifyBox.style.cssText = baseStyleAddition;
 
         if (isSavedGreen) {
-            notifyBox.style.cssText = 'border:1px solid #00ff00!important;box-shadow:0 0 15px #00ff00,inset 0 0 6px #00ff00!important;color:#00ff00!important;font-weight:bold!important;';
-            setTimeout(() => { if (notifyBox.innerText === text) { notifyBox.style.cssText = `border:1px solid ${isTrackSaved ? '#ffffff' : getStatusColor(timestamp)}!important;`; } }, 1000);
-        } else {
-            notifyBox.style.cssText = `border:1px solid ${isTrackSaved ? '#ffffff' : getStatusColor(timestamp)}!important;`;
+            setTimeout(() => {
+                if (notifyBox.innerText === text) {
+                    notifyBox.style.borderColor = isTrackSaved ? '#ffffff' : color;
+                    notifyBox.style.color = 'rgba(255,255,255,1.0)';
+                    notifyBox.style.boxShadow = '-1px 1px 5px rgba(0,0,0,0.4)';
+                }
+            }, 1000);
         }
         updateBorders();
     }
