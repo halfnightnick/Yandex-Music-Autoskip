@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      38.6
+// @version      38.7
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -67,14 +67,14 @@
         if (hours < 24) return `${hours} ${pluralize(hours, 'час', 'часа', 'часов')} назад`;
 
         let days = (hours / 24) | 0;
-        if (days < 7) return `${days} ${pluralize(days, 'день', 'дня', 'дней')} назад`;
+        if (days < 14) return `${days} ${pluralize(days, 'день', 'дня', 'дней')} назад`;
 
         let weeks = (days / 7) | 0;
         let months = (days / 30.44) | 0;
         let years = (days / 365.25) | 0;
 
-        if (months < 1) return `${weeks} ${pluralize(weeks, 'неделю', 'недели', 'недель')} назад`;
-        if (years < 1) return `${months} ${pluralize(months, 'месяц', 'месяца', 'месяцев')} назад`;
+        if (months < 2) return `${weeks} ${pluralize(weeks, 'неделю', 'недели', 'недель')} назад`;
+        if (years < 2) return `${months} ${pluralize(months, 'месяц', 'месяца', 'месяцев')} назад`;
         return `${years} ${pluralize(years, 'год', 'года', 'лет')} назад`;
     }
     // --- УПРАВЛЕНИЕ ХРАНИЛИЩЕМ INDEXEDDB ---
