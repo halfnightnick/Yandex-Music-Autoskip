@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      39.1
+// @version      40.0
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -27,7 +27,6 @@
 // @grant        GM_getValue
 // @run-at       document-start
 // ==/UserScript==
-
 (function() {
     'use strict';
 
@@ -77,18 +76,15 @@
         if (years < 2) return `${months} ${pluralize(months, 'месяц', 'месяца', 'месяцев')} назад`;
         return `${years} ${pluralize(years, 'год', 'года', 'лет')} назад`;
     }
-
-    // --- УПРАВЛЕНИЕ ХРАНИЛИЩЕМ INDEXEDDB С ЗАЩИТОЙ ОТ УДАЛЕНИЯ ---
+    // --- УПРАВЛЕНИЕ ХРАНИЛИЩЕМ INDEXEDDB С АВТОКОНВЕРТАЦИЕЙ ФОРМАТА ---
 
     async function initDatabase() {
         if (navigator.storage && navigator.storage.persist) {
             try {
                 const isPersisted = await navigator.storage.persisted();
-                if (!isPersisted) {
-                    await navigator.storage.persist();
-                }
+                if (!isPersisted) await navigator.storage.persist();
             } catch (e) {
-                console.warn('YandexMusicAutoskip: Не удалось перевести хранилище в статус Persistent.');
+                console.warn('YandexMusicAutoskip: Не удалось включить Persistent Storage.');
             }
         }
 
@@ -101,20 +97,60 @@
         };
         request.onsuccess = function(event) {
             db = event.target.result;
+
+            // Проверяем, нужно ли выполнить миграцию из LocalStorage (для совсем старых версий)
             let oldData = GM_getValue('ym_counter_v9', null);
             if (oldData) {
                 let history = (typeof oldData === 'string') ? JSON.parse(oldData) : oldData;
                 let transaction = db.transaction(['history'], 'readwrite');
                 let store = transaction.objectStore(['history']);
-                for (let key in history) { store.put(history[key], key); }
-
+                for (let key in history) {
+                    // Парсим старый "title — artist" и переводим в новый "artist — title"
+                    let parts = key.split(' — ');
+                    let newKey = parts.slice(1).join(' — ') + ' — ' + parts[0];
+                    store.put(history[key], newKey);
+                }
                 transaction.oncomplete = function() {
                     GM_setValue('ym_counter_v9', null);
+                    GM_setValue('ym_base_format_v2', true); // Помечаем, что база обновлена
+                };
+                return;
+            }
+
+            // ПРОВЕРКА И КОНВЕРТАЦИЯ СТАРОЙ БАЗЫ INDEXEDDB В НОВЫЙ ФОРМАТ
+            if (!GM_getValue('ym_base_format_v2', false)) {
+                let tx = db.transaction(['history'], 'readonly');
+                let store = tx.objectStore('history');
+                let keysRequest = store.getAllKeys();
+                let valuesRequest = store.getAll();
+
+                tx.oncomplete = function() {
+                    let oldKeys = keysRequest.result;
+                    let oldValues = valuesRequest.result;
+
+                    if (oldKeys.length > 0) {
+                        let writeTx = db.transaction(['history'], 'readwrite');
+                        let writeStore = writeTx.objectStore('history');
+                        writeStore.clear(); // Начисто удаляем старый формат
+
+                        for (let i = 0; i < oldKeys.length; i++) {
+                            let parts = oldKeys[i].split(' — ');
+                            let newKey = parts.slice(1).join(' — ') + ' — ' + parts[0];
+                            writeStore.put(oldValues[i], newKey);
+                        }
+                        writeTx.oncomplete = function() {
+                            GM_setValue('ym_base_format_v2', true); // Фиксируем успешную конвертацию
+                            console.log('YandexMusicAutoskip: База данных успешно конвертирована в формат Исполнитель — Трек');
+                        };
+                    } else {
+                        GM_setValue('ym_base_format_v2', true);
+                    }
                 };
             }
         };
     }
 
+    // ЭКСПОРТ: Добавляем системную метку версии формата в начало файла
     function exportHistoryToFile() {
         if (!db) return alert('База данных еще загружается, попробуйте снова.');
 
@@ -122,9 +158,8 @@
         let store = transaction.objectStore('history');
         let cursorRequest = store.openCursor();
 
-        let jsonParts = ['{\n'];
-        let isFirst = true;
-
+        // Внедряем в начало файла служебный маркер __version__
+        let jsonParts = ['{\n"__version__": 2'];
         let expBox = document.getElementById('ym-autoskip-exp-box');
         if (expBox) {
             expBox.style.setProperty('border', '1px solid #ff9900', 'important');
@@ -134,9 +169,7 @@
         cursorRequest.onsuccess = function(event) {
             let cursor = event.target.result;
             if (cursor) {
-                let recordStr = (isFirst ? '' : ',\n') + JSON.stringify(cursor.key) + ':' + JSON.stringify(cursor.value);
-                isFirst = false;
-
+                let recordStr = ',\n' + JSON.stringify(cursor.key) + ':' + JSON.stringify(cursor.value);
                 jsonParts.push(recordStr);
 
                 if (jsonParts.length % 5000 === 0) {
@@ -146,7 +179,6 @@
                 }
             } else {
                 jsonParts.push('\n}');
-
                 let blob = new Blob(jsonParts, { type: 'application/json;charset=utf-8;' });
                 let blobUrl = URL.createObjectURL(blob);
 
@@ -166,16 +198,9 @@
                 }
             }
         };
-
-        cursorRequest.onerror = function() {
-            alert('Ошибка чтения базы данных при экспорте.');
-            if (expBox) {
-                expBox.style.borderColor = '#ffffff';
-                expBox.style.boxShadow = '-1px 1px 5px rgba(0,0,0,0.4)';
-            }
-        };
     }
 
+    // ИМПОРТ: Проверяет версию файла и на лету конвертирует старые треки при загрузке
     function importHistoryFromFile(event) {
         let file = event.target.files;
         if (!file || !db) return;
@@ -184,12 +209,18 @@
         reader.onload = function(e) {
             try {
                 let importedData = JSON.parse(e.target.result);
+
+                // Проверяем, есть ли маркер нового формата в загружаемом файле
+                let isNewFormatFile = importedData["__version__"] === 2;
+
+                // Удаляем служебный ключ, чтобы он не записался в базу как трек
+                delete importedData["__version__"];
+
                 let keys = Object.keys(importedData);
                 let totalTracks = keys.length;
                 let currentIndex = 0;
                 const BATCH_SIZE = 20000;
 
-                // ИСПРАВЛЕНО: Берем правильный ID контейнера (ym-autoskip-imp-box)
                 let impBox = document.getElementById('ym-autoskip-imp-box');
                 if (impBox) {
                     impBox.style.setProperty('border', '1px solid #ff9900', 'important');
@@ -202,7 +233,6 @@
                 clearTx.oncomplete = function() {
                     function writeNextBatch() {
                         if (currentIndex >= totalTracks) {
-                            // ИСПРАВЛЕНО: Успешное завершение теперь корректно красит и подсвечивает нужную кнопку
                             if (impBox) {
                                 impBox.style.setProperty('border', '1px solid #00ff00', 'important');
                                 impBox.style.setProperty('box-shadow', '0 0 15px #00ff00, inset 0 0 6px #00ff00', 'important');
@@ -219,8 +249,7 @@
                             }
 
                             if (currentTrackKey) {
-                                let parts = currentTrackKey.split(' — ');
-                                onTrackChanged(parts, parts.slice(1).join(' — '), true);
+                                onTrackChanged(currentTrackKey, null, true);
                             }
                             return;
                         }
@@ -230,16 +259,22 @@
                         let limit = Math.min(currentIndex + BATCH_SIZE, totalTracks);
 
                         for (let i = currentIndex; i < limit; i++) {
-                            store.put(importedData[keys[i]], keys[i]);
+                            let key = keys[i];
+                            let value = importedData[key];
+
+                            // Если файл старый (v1), на лету переворачиваем строку ключа перед сохранением
+                            if (!isNewFormatFile) {
+                                let parts = key.split(' — ');
+                                key = parts.slice(1).join(' — ') + ' — ' + parts[0];
+                            }
+
+                            store.put(value, key);
                         }
 
                         currentIndex = limit;
 
                         tx.oncomplete = function() {
                             setTimeout(writeNextBatch, 0);
-                        };
-                        tx.onerror = function() {
-                            alert('Ошибка при импорте пакета данных.');
                         };
                     }
 
@@ -250,10 +285,9 @@
                 alert('Ошибка: Файл поврежден или имеет неверный формат.');
             }
         };
-        reader.readAsText(file[0]); // ИСПРАВЛЕНО: Явно берем первый файл из коллекции
+        reader.readAsText(file[0]);
         event.target.value = '';
     }
-
     function getStatusColor(timestamp) {
         if (!timestamp) return '#8a2be2';
         let daysPassed = (Date.now() - timestamp) / 86400000;
@@ -349,7 +383,7 @@
         rangeInput.addEventListener('input', (e) => {
             GM_setValue('ym_autoskip_days', parseInt(e.target.value, 10));
             rangeValueDisplay.innerText = `${e.target.value} дн.`;
-            checkAndTriggerSkip();
+            PlaybackController.checkAndTriggerSkip();
         });
 
         box.appendChild(rangeInput);
@@ -450,8 +484,9 @@
         }
     }
 
+    // ИСПРАВЛЕНО: Формат изменен на Исполнитель — Название трека
     function onTrackChanged(title, artist, forceUpdate = false) {
-        let trackKey = `${title} — ${artist || 'Неизвестный исполнитель'}`;
+        let trackKey = artist ? `${artist} — ${title}` : title;
         if (trackKey === currentTrackKey && !forceUpdate) return;
 
         if (skipTimeoutId) {
