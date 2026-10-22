@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      40.2
+// @version      41.0
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -42,8 +42,8 @@
 
     const liveAudioCollection = document.getElementsByTagName('audio');
     const cachedKeyEvent = { key: 'n', code: 'KeyN', keyCode: 78, which: 78, bubbles: true, cancelable: true };
-    // --- ПОБИТОВАЯ МАТЕМАТИКА И ПЛЮРАЛИЗАЦИЯ ---
 
+    // --- ПОБИТОВАЯ МАТЕМАТИКА И ПЛЮРАЛИЗАЦИЯ ---
     const pluralize = (number, form1, form2, form5) => {
         let n = number % 100;
         let n1 = n % 10;
@@ -76,8 +76,7 @@
         if (years < 2) return `${months} ${pluralize(months, 'месяц', 'месяца', 'месяцев')} назад`;
         return `${years} ${pluralize(years, 'год', 'года', 'лет')} назад`;
     }
-
-   // --- УПРАВЛЕНИЕ ХРАНИЛИЩЕМ INDEXEDDB С АВТОКОНВЕРТАЦИЕЙ ФОРМАТА ---
+    // --- УПРАВЛЕНИЕ ХРАНИЛИЩЕМ INDEXEDDB С ЛЕГКОЙ МИГРАЦИЕЙ СТАРЫХ DАННЫХ ---
     async function initDatabase() {
         if (navigator.storage && navigator.storage.persist) {
             try {
@@ -98,203 +97,184 @@
             }
         };
 
-        // ОБРАБОТКА ПОВРЕЖДЕНИЯ БАЗЫ ДАННЫХ
         request.onerror = function(event) {
-            console.error('YandexMusicAutoskip: База данных повреждена или заблокирована. Попытка автоматического пересоздания...', event.target.error);
-
-            // Закрываем соединение, если оно было частично открыто
-            if (db) {
-                db.close();
-                db = null;
-            }
-
-            // Удаляем поврежденную базу данных
+            console.error('YandexMusicAutoskip: База данных повреждена. Пересоздание...', event.target.error);
+            if (db) { db.close(); db = null; }
             const deleteRequest = indexedDB.deleteDatabase(DB_NAME);
-
-            deleteRequest.onsuccess = function() {
-                console.warn('YandexMusicAutoskip: Поврежденная база данных успешно удалена. Инициализация новой базы...');
-                // Рекурсивно вызываем инициализацию заново, чтобы создать чистую базу
-                initDatabase();
-            };
-
-            deleteRequest.onerror = function() {
-                console.error('YandexMusicAutoskip: КРИТИЧЕСКАЯ ОШИБКА. Не удалось удалить поврежденную базу данных.');
-            };
+            deleteRequest.onsuccess = function() { initDatabase(); };
         };
 
         request.onsuccess = function(event) {
             db = event.target.result;
 
-            // Проверяем, нужно ли выполнить миграцию из LocalStorage (для совсем старых версий)
+            // БЫСТРАЯ МИГРАЦИЯ ИЗ СТАРОГО LOCALSTORAGE (ОБЪЕМ ГАРАНТИРОВАННО < 5 МБ)
             let oldData = GM_getValue('ym_counter_v9', null);
             if (oldData) {
                 try {
                     let history = (typeof oldData === 'string') ? JSON.parse(oldData) : oldData;
-                    let transaction = db.transaction(['history'], 'readwrite');
-                    let store = transaction.objectStore(['history']);
-                    for (let key in history) {
-                        let parts = key.split(' — ');
-                        let newKey = parts.slice(1).join(' — ') + ' — ' + parts[0];
-                        store.put(history[key], newKey);
+                    let keys = Object.keys(history);
+                    let currentIndex = 0;
+                    const BATCH_SIZE = 2000;
+
+                    function writeMigrationBatch() {
+                        if (currentIndex >= keys.length) {
+                            GM_setValue('ym_counter_v9', null);
+                            GM_setValue('ym_base_format_v2', true);
+                            console.log('YandexMusicAutoskip: Успешная миграция старой базы v9 завершена.');
+                            if (currentTrackKey) onTrackChanged(currentTrackKey, null, true);
+                            return;
+                        }
+
+                        let transaction = db.transaction(['history'], 'readwrite');
+                        let store = transaction.objectStore('history');
+                        let limit = Math.min(currentIndex + BATCH_SIZE, keys.length);
+
+                        for (let i = currentIndex; i < limit; i++) {
+                            let oldKey = keys[i];
+                            let parts = oldKey.split(' — ');
+                            let newKey = oldKey;
+
+                            // Зафиксировано: из формата "Название — Исполнитель" получаем строго "Исполнитель — Название"
+                            if (parts.length > 1 && parts) {
+                                newKey = parts.slice(1).join(' — ') + ' — ' + parts[0];
+                            }
+                            store.put(history[oldKey], newKey);
+                        }
+
+                        currentIndex = limit;
+                        transaction.oncomplete = function() {
+                            setTimeout(writeMigrationBatch, 5);
+                        };
                     }
-                    transaction.oncomplete = function() {
-                        GM_setValue('ym_counter_v9', null);
-                        GM_setValue('ym_base_format_v2', true);
-                    };
+
+                    writeMigrationBatch();
                 } catch (e) {
                     console.error('YandexMusicAutoskip: Ошибка миграции старых данных из LocalStorage', e);
+                    GM_setValue('ym_base_format_v2', true);
                 }
                 return;
             }
 
-            // ПРОВЕРКА И КОНВЕРТАЦИЯ СТАРОЙ БАЗЫ INDEXEDDB В НОВЫЙ ФОРМАТ
-            if (!GM_getValue('ym_base_format_v2', false)) {
-                try {
-                    let tx = db.transaction(['history'], 'readonly');
-                    let store = tx.objectStore('history');
-                    let keysRequest = store.getAllKeys();
-                    let valuesRequest = store.getAll();
-
-                    tx.oncomplete = function() {
-                        let oldKeys = keysRequest.result;
-                        let oldValues = valuesRequest.result;
-
-                        if (oldKeys.length > 0) {
-                            let writeTx = db.transaction(['history'], 'readwrite');
-                            let writeStore = writeTx.objectStore('history');
-                            writeStore.clear();
-
-                            for (let i = 0; i < oldKeys.length; i++) {
-                                let parts = oldKeys[i].split(' — ');
-                                let newKey = parts.slice(1).join(' — ') + ' — ' + parts[0];
-                                writeStore.put(oldValues[i], newKey);
-                            }
-                            writeTx.oncomplete = function() {
-                                GM_setValue('ym_base_format_v2', true);
-                                console.log('YandexMusicAutoskip: База данных успешно конвертирована в формат Исполнитель — Трек');
-                            };
-                        } else {
-                            GM_setValue('ym_base_format_v2', true);
-                        }
-                    };
-                    tx.onerror = function() {
-                        console.error('YandexMusicAutoskip: Ошибка чтения при конвертации формата базы данных.');
-                    };
-                } catch (e) {
-                    console.error('YandexMusicAutoskip: Не удалось запустить конвертацию формата базы данных.', e);
-                }
-            }
+            GM_setValue('ym_base_format_v2', true);
         };
     }
-
+    // --- ПОТОКОВЫЙ ИМПОРТ БОЛЬШИХ ФАЙЛОВ ---
     function importHistoryFromFile(event) {
-        let file = event.target.files;
-        if (!file || !db) return;
+        let files = event.target.files;
+        if (!files || files.length === 0 || !db) return;
+        let file = files[0];
 
-        let reader = new FileReader();
-        reader.onload = function(e) {
-            try {
-                // Для миллионной базы этот шаг потребует памяти, но порционная запись спасет от OOM в IndexedDB
-                let importedData = JSON.parse(e.target.result);
-                let isNewFormatFile = importedData["__version__"] === 2;
-                delete importedData["__version__"];
+        let impBox = document.getElementById('ym-autoskip-imp-box');
+        if (impBox) {
+            impBox.style.setProperty('border', '1px solid #ff9900', 'important');
+            impBox.style.setProperty('box-shadow', '0 0 10px #ff9900', 'important');
+        }
 
-                let keys = Object.keys(importedData);
-                let totalTracks = keys.length;
-                let currentIndex = 0;
+        let clearTx = db.transaction(['history'], 'readwrite');
+        clearTx.objectStore('history').clear();
 
-                // Оптимальный размер пачки для миллиона записей, чтобы Main Thread не блокировался дольше 16мс (1 кадр)
-                const BATCH_SIZE = 1500;
+        clearTx.oncomplete = function() {
+            const stream = file.stream();
+            const reader = stream.getReader();
+            const decoder = new TextDecoder("utf-8");
 
-                let impBox = document.getElementById('ym-autoskip-imp-box');
-                if (impBox) {
-                    impBox.style.setProperty('border', '1px solid #ff9900', 'important');
-                    impBox.style.setProperty('box-shadow', '0 0 10px #ff9900', 'important');
-                }
+            let buffer = "";
+            let totalTracks = 0;
+            let currentBatch = [];
+            const BATCH_SIZE = 3000;
 
-                let clearTx = db.transaction(['history'], 'readwrite');
-                clearTx.objectStore('history').clear();
-
-                clearTx.oncomplete = function() {
-                    function writeNextBatch() {
-                        if (currentIndex >= totalTracks) {
-                            // Успешное завершение
-                            if (impBox) {
-                                impBox.style.setProperty('border', '1px solid #00ff00', 'important');
-                                impBox.style.setProperty('box-shadow', '0 0 15px #00ff00, inset 0 0 6px #00ff00', 'important');
-                                impBox.style.setProperty('color', '#00ff00', 'important');
-                                let impBtn = impBox.querySelector('.ym-btn');
-                                if (impBtn) impBtn.style.setProperty('color', '#00ff00', 'important');
-
-                                setTimeout(() => {
-                                    impBox.style.borderColor = '#ffffff';
-                                    impBox.style.boxShadow = '-1px 1px 5px rgba(0,0,0,0.4)';
-                                    impBox.style.color = '#ffffff';
-                                    if (impBtn) impBtn.style.setProperty('color', '#ffffff', 'important');
-                                }, 1500);
-                            }
-
-                            if (currentTrackKey) {
-                                onTrackChanged(currentTrackKey, null, true);
-                            }
-
-                            // Освобождаем память памяти принудительно
-                            importedData = null;
-                            keys = null;
-
-                            alert('Импорт успешно завершен! Обработано треков: ' + totalTracks);
-                            return;
+            async function processStream() {
+                try {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) {
+                            buffer += "\n}";
+                            parseBufferPairs(true);
+                            break;
                         }
-
-                        let tx = db.transaction(['history'], 'readwrite');
-                        let store = tx.objectStore('history');
-                        let limit = Math.min(currentIndex + BATCH_SIZE, totalTracks);
-
-                        for (let i = currentIndex; i < limit; i++) {
-                            let key = keys[i];
-                            let value = importedData[key];
-
-                            if (!isNewFormatFile) {
-                                let parts = key.split(' — ');
-                                key = parts.slice(1).join(' — ') + ' — ' + (parts[0] || '');
-                            }
-
-                            store.put(value, key);
-                        }
-
-                        currentIndex = limit;
-
-                        tx.oncomplete = function() {
-                            // Небольшой таймаут в 10мс позволяет браузеру обработать клики/клипы в этот момент
-                            setTimeout(writeNextBatch, 10);
-                        };
-
-                        tx.onerror = function(err) {
-                            console.error('Ошибка IndexedDB при импорте пачки:', err);
-                            alert('Произошла ошибка при записи данных.');
-                        };
+                        buffer += decoder.decode(value, { stream: true });
+                        await parseBufferPairs(false);
                     }
 
-                    writeNextBatch();
-                };
-            } catch(err) {
-                alert('Ошибка: Файл поврежден или имеет неверный формат.');
-                console.error(err);
+                    if (currentBatch.length > 0) {
+                        await writeBatchToDB(currentBatch);
+                    }
+
+                    if (impBox) {
+                        impBox.style.setProperty('border', '1px solid #00ff00', 'important');
+                        impBox.style.setProperty('box-shadow', '0 0 15px #00ff00, inset 0 0 6px #00ff00', 'important');
+                        impBox.style.setProperty('color', '#00ff00', 'important');
+                        setTimeout(() => {
+                            impBox.style.borderColor = '#ffffff';
+                            impBox.style.boxShadow = '-1px 1px 5px rgba(0,0,0,0.4)';
+                            impBox.style.color = '#ffffff';
+                        }, 1500);
+                    }
+                    if (currentTrackKey) onTrackChanged(currentTrackKey, null, true);
+                    alert('Импорт завершен! Обработано треков: ' + totalTracks);
+
+                } catch (err) {
+                    console.error('Критическая ошибка импорта:', err);
+                    alert('Ошибка при импорте файла.');
+                }
             }
+
+            async function parseBufferPairs(isEnd) {
+                const regex = /"((?:[^"\\]|\\.)*)"\s*:\s*([0-9]+)/g;
+                let match;
+                let lastIndex = 0;
+
+                while ((match = regex.exec(buffer)) !== null) {
+                    let rawKey = match[1];
+                    let val = parseInt(match[2], 10);
+
+                    if (rawKey !== "__version__") {
+                        let key = rawKey;
+                        try {
+                            // Декодируем экранированные слэши JSON обратно в нормальную JS-строку
+                            key = JSON.parse('"' + rawKey + '"');
+                        } catch(e) {
+                            key = rawKey;
+                        }
+
+                        currentBatch.push({ key, val });
+                        totalTracks++;
+
+                        if (currentBatch.length >= BATCH_SIZE) {
+                            let batchToSave = currentBatch;
+                            currentBatch = [];
+                            await new Promise(resolve => setTimeout(resolve, 2));
+                            await writeBatchToDB(batchToSave);
+                        }
+                    }
+                    lastIndex = regex.lastIndex;
+                }
+
+                if (lastIndex > 0) {
+                    buffer = buffer.substring(lastIndex);
+                }
+            }
+
+            function writeBatchToDB(batch) {
+                return new Promise((resolve, reject) => {
+                    let tx = db.transaction(['history'], 'readwrite');
+                    let store = tx.objectStore('history');
+                    for (let i = 0; i < batch.length; i++) {
+                        store.put(batch[i].val, batch[i].key);
+                    }
+                    tx.oncomplete = () => resolve();
+                    tx.onerror = (err) => reject(err);
+                });
+            }
+
+            processStream();
         };
-        reader.readAsText(file[0]);
         event.target.value = '';
     }
-
-
+    // --- ОПТИМИЗИРОВАННЫЙ ЭКСПОРТ ---
     function exportHistoryToFile() {
         if (!db) {
-            initDatabase().then(() => {
-                executeExport();
-            }).catch((err) => {
-                console.error(err);
-                alert('Критическая ошибка базы данных. Попробуйте очистить кэш сайта Яндекс Музыка или перезапустить браузер.');
-            });
+            initDatabase().then(() => executeExport()).catch(() => alert('Ошибка базы данных.'));
             return;
         }
         executeExport();
@@ -320,20 +300,17 @@
         cursorRequest.onsuccess = function(event) {
             let cursor = event.target.result;
             if (cursor) {
-                currentChunk += ',\n' + JSON.stringify(cursor.key) + ':' + JSON.stringify(cursor.value);
+                currentChunk += ',\n' + JSON.stringify(cursor.key) + ':' + cursor.value;
                 recordCount++;
 
-                // Каждые 2000 записей сбрасываем строку в Blob-чанк, освобождая оперативную память
-                if (recordCount % 2000 === 0) {
+                if (recordCount % 5000 === 0) {
                     chunks.push(currentChunk);
                     currentChunk = '';
-                    // Передаем управление браузеру на 1 микросекунду, чтобы интерфейс не зависал
                     setTimeout(() => cursor.continue(), 0);
                 } else {
                     cursor.continue();
                 }
             } else {
-                // Финализируем экспорт
                 if (currentChunk) chunks.push(currentChunk);
                 chunks.push('\n}');
 
@@ -349,7 +326,6 @@
                 document.body.removeChild(downloadAnchor);
                 URL.revokeObjectURL(blobUrl);
 
-                // Явно очищаем ссылки для сборщика мусора (GC)
                 chunks = null;
                 currentChunk = null;
 
@@ -360,7 +336,7 @@
             }
         };
     }
-
+    // --- ИНТЕРФЕЙС И УВЕДОМЛЕНИЯ ---
     function getStatusColor(timestamp) {
         if (!timestamp) return '#8a2be2';
         let daysPassed = (Date.now() - timestamp) / 86400000;
@@ -402,13 +378,6 @@
         document.head.appendChild(style);
     }
 
-    function updateBorders() {
-        let isEnabled = GM_getValue('ym_autoskip_enabled', true);
-        let borderStyle = `1px solid ${isEnabled ? '#ffffff' : '#333333'}`;
-        let settingsBox = document.getElementById('ym-autoskip-box');
-        if (settingsBox) settingsBox.style.setProperty('border', borderStyle, 'important');
-    }
-
     function createSettingsBox() {
         let box = document.getElementById('ym-autoskip-box');
         if (box || !document.body) return;
@@ -419,20 +388,23 @@
         box.id = 'ym-autoskip-box';
         box.className = 'ym-base ym-settings';
 
+        let isEnabled = GM_getValue('ym_autoskip_enabled', true);
+        box.style.border = `1px solid ${isEnabled ? '#ffffff' : '#333333'}`;
+
         let label = document.createElement('label');
         label.style.cssText = 'cursor:pointer!important; gap:4px!important;';
 
         let checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.style.cssText = 'margin:0!important;width:11px!important;height:11px!important;cursor:pointer!important;flex-shrink:0!important;';
-        checkbox.checked = GM_getValue('ym_autoskip_enabled', true);
+        checkbox.checked = isEnabled;
 
         let labelText = document.createElement('span');
         labelText.innerText = 'Скипать игравшее в последние';
 
         checkbox.addEventListener('change', (e) => {
             GM_setValue('ym_autoskip_enabled', e.target.checked);
-            updateBorders();
+            box.style.border = `1px solid ${e.target.checked ? '#ffffff' : '#333333'}`;
             if (e.target.checked) checkAndTriggerSkip();
         });
 
@@ -456,7 +428,7 @@
         rangeInput.addEventListener('input', (e) => {
             GM_setValue('ym_autoskip_days', parseInt(e.target.value, 10));
             rangeValueDisplay.innerText = `${e.target.value} дн.`;
-            PlaybackController.checkAndTriggerSkip();
+            checkAndTriggerSkip();
         });
 
         box.appendChild(rangeInput);
@@ -490,9 +462,8 @@
         impBox.appendChild(impBtn);
         impBox.appendChild(fileInput);
         document.body.appendChild(impBox);
-
-        updateBorders();
     }
+
     function showNotification(text, isSavedGreen = false, timestamp = null) {
         createSettingsBox();
         let notifyBox = document.getElementById('ym-history-notify');
@@ -500,8 +471,6 @@
             notifyBox = document.createElement('div');
             notifyBox.id = 'ym-history-notify';
             notifyBox.className = 'ym-base ym-notify';
-            document.body.appendChild(notifyBox);
-        } else if (notifyBox.parentElement !== document.body) {
             document.body.appendChild(notifyBox);
         }
 
@@ -520,9 +489,8 @@
                 }
             }, 1000);
         }
-        updateBorders();
     }
-
+    // --- АВТОПРОПУСК И ОБРАБОТКА ХОДА ВОСПРОИЗВЕДЕНИЯ ---
     function simulateHumanKeyPress() {
         const downEvent = new KeyboardEvent('keydown', cachedKeyEvent);
         const upEvent = new KeyboardEvent('keyup', cachedKeyEvent);
@@ -539,10 +507,7 @@
     }
 
     function checkAndTriggerSkip() {
-        if (skipTimeoutId) {
-            clearTimeout(skipTimeoutId);
-            skipTimeoutId = null;
-        }
+        if (skipTimeoutId) { clearTimeout(skipTimeoutId); skipTimeoutId = null; }
 
         if (lastPlayedTimestamp && GM_getValue('ym_autoskip_enabled', true)) {
             if ((((Date.now() - lastPlayedTimestamp) / 86400000) | 0) <= GM_getValue('ym_autoskip_days', 10)) {
@@ -557,15 +522,11 @@
         }
     }
 
-    // ИСПРАВЛЕНО: Формат изменен на Исполнитель — Название трека
     function onTrackChanged(title, artist, forceUpdate = false) {
         let trackKey = artist ? `${artist} — ${title}` : title;
         if (trackKey === currentTrackKey && !forceUpdate) return;
 
-        if (skipTimeoutId) {
-            clearTimeout(skipTimeoutId);
-            skipTimeoutId = null;
-        }
+        if (skipTimeoutId) { clearTimeout(skipTimeoutId); skipTimeoutId = null; }
 
         currentTrackKey = trackKey;
         isTrackSaved = false;
@@ -618,9 +579,10 @@
         audio.addEventListener('play', onAudioPlayEvent);
     }
 
+    // Перехват прототипа document
     document.createElement = (function(originalMethod) {
         return function(tagName, options) {
-            let element = originalMethod.call(document, tagName, options);
+            let element = Reflect.apply(originalMethod, document, arguments);
             if (tagName && tagName.toLowerCase() === 'audio') { initAudioElement(element); }
             return element;
         };
