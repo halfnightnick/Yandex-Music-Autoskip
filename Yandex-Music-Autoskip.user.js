@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      38.7
+// @version      39.1
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -39,10 +39,10 @@
     let statusText = 'Трек играет впервые';
     let isReadyToCheck = false;
     let db = null;
+    let skipTimeoutId = null;
 
     const liveAudioCollection = document.getElementsByTagName('audio');
     const cachedKeyEvent = { key: 'n', code: 'KeyN', keyCode: 78, which: 78, bubbles: true, cancelable: true };
-
     // --- ПОБИТОВАЯ МАТЕМАТИКА И ПЛЮРАЛИЗАЦИЯ ---
 
     const pluralize = (number, form1, form2, form5) => {
@@ -77,9 +77,21 @@
         if (years < 2) return `${months} ${pluralize(months, 'месяц', 'месяца', 'месяцев')} назад`;
         return `${years} ${pluralize(years, 'год', 'года', 'лет')} назад`;
     }
-    // --- УПРАВЛЕНИЕ ХРАНИЛИЩЕМ INDEXEDDB ---
 
-    function initDatabase() {
+    // --- УПРАВЛЕНИЕ ХРАНИЛИЩЕМ INDEXEDDB С ЗАЩИТОЙ ОТ УДАЛЕНИЯ ---
+
+    async function initDatabase() {
+        if (navigator.storage && navigator.storage.persist) {
+            try {
+                const isPersisted = await navigator.storage.persisted();
+                if (!isPersisted) {
+                    await navigator.storage.persist();
+                }
+            } catch (e) {
+                console.warn('YandexMusicAutoskip: Не удалось перевести хранилище в статус Persistent.');
+            }
+        }
+
         const request = indexedDB.open('YandexMusicAutoskipDB', 1);
         request.onupgradeneeded = function(event) {
             let database = event.target.result;
@@ -95,87 +107,152 @@
                 let transaction = db.transaction(['history'], 'readwrite');
                 let store = transaction.objectStore(['history']);
                 for (let key in history) { store.put(history[key], key); }
-                GM_setValue('ym_counter_v9', null);
+
+                transaction.oncomplete = function() {
+                    GM_setValue('ym_counter_v9', null);
+                };
             }
         };
     }
 
     function exportHistoryToFile() {
         if (!db) return alert('База данных еще загружается, попробуйте снова.');
+
         let transaction = db.transaction(['history'], 'readonly');
         let store = transaction.objectStore('history');
-        let request = store.openCursor();
-        let exportData = {};
+        let cursorRequest = store.openCursor();
 
-        request.onsuccess = function(event) {
+        let jsonParts = ['{\n'];
+        let isFirst = true;
+
+        let expBox = document.getElementById('ym-autoskip-exp-box');
+        if (expBox) {
+            expBox.style.setProperty('border', '1px solid #ff9900', 'important');
+            expBox.style.setProperty('box-shadow', '0 0 10px #ff9900', 'important');
+        }
+
+        cursorRequest.onsuccess = function(event) {
             let cursor = event.target.result;
             if (cursor) {
-                exportData[cursor.key] = cursor.value;
-                cursor.continue();
+                let recordStr = (isFirst ? '' : ',\n') + JSON.stringify(cursor.key) + ':' + JSON.stringify(cursor.value);
+                isFirst = false;
+
+                jsonParts.push(recordStr);
+
+                if (jsonParts.length % 5000 === 0) {
+                    setTimeout(() => cursor.continue(), 0);
+                } else {
+                    cursor.continue();
+                }
             } else {
-                let dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportData));
+                jsonParts.push('\n}');
+
+                let blob = new Blob(jsonParts, { type: 'application/json;charset=utf-8;' });
+                let blobUrl = URL.createObjectURL(blob);
+
                 let downloadAnchor = document.createElement('a');
-                downloadAnchor.setAttribute("href", dataStr);
-                downloadAnchor.setAttribute("download", "yandex_music_history.json");
+                downloadAnchor.href = blobUrl;
+                downloadAnchor.download = "yandex_music_history.json";
                 document.body.appendChild(downloadAnchor);
                 downloadAnchor.click();
-                downloadAnchor.remove();
+
+                document.body.removeChild(downloadAnchor);
+                URL.revokeObjectURL(blobUrl);
+                jsonParts = null;
+
+                if (expBox) {
+                    expBox.style.borderColor = '#ffffff';
+                    expBox.style.boxShadow = '-1px 1px 5px rgba(0,0,0,0.4)';
+                }
+            }
+        };
+
+        cursorRequest.onerror = function() {
+            alert('Ошибка чтения базы данных при экспорте.');
+            if (expBox) {
+                expBox.style.borderColor = '#ffffff';
+                expBox.style.boxShadow = '-1px 1px 5px rgba(0,0,0,0.4)';
             }
         };
     }
 
     function importHistoryFromFile(event) {
-        // Исправлено: берем первый файл из списка [0]
-        let file = event.target.files[0];
+        let file = event.target.files;
         if (!file || !db) return;
 
         let reader = new FileReader();
         reader.onload = function(e) {
             try {
                 let importedData = JSON.parse(e.target.result);
-                let transaction = db.transaction(['history'], 'readwrite');
-                let store = transaction.objectStore('history');
+                let keys = Object.keys(importedData);
+                let totalTracks = keys.length;
+                let currentIndex = 0;
+                const BATCH_SIZE = 20000;
 
-                // Очищаем существующую базу перед импортом новых данных
-                store.clear();
-
-                for (let key in importedData) {
-                    store.put(importedData[key], key);
+                // ИСПРАВЛЕНО: Берем правильный ID контейнера (ym-autoskip-imp-box)
+                let impBox = document.getElementById('ym-autoskip-imp-box');
+                if (impBox) {
+                    impBox.style.setProperty('border', '1px solid #ff9900', 'important');
+                    impBox.style.setProperty('box-shadow', '0 0 10px #ff9900', 'important');
                 }
 
-                // Логика визуального отклика выполняется после успешной записи всех данных
-                transaction.oncomplete = function() {
-                    // Эффект зеленого свечения для контейнера кнопки импорта на 1 секунду
-                    let impBox = document.getElementById('ym-autoskip-imp-box');
-                    if (impBox) {
-                        impBox.style.setProperty('border', '1px solid #00ff00', 'important');
-                        impBox.style.setProperty('box-shadow', '0 0 15px #00ff00, inset 0 0 6px #00ff00', 'important');
-                        impBox.style.setProperty('color', '#00ff00', 'important');
+                let clearTx = db.transaction(['history'], 'readwrite');
+                clearTx.objectStore('history').clear();
 
-                        let impBtn = impBox.querySelector('.ym-btn');
-                        if (impBtn) impBtn.style.setProperty('color', '#00ff00', 'important');
+                clearTx.oncomplete = function() {
+                    function writeNextBatch() {
+                        if (currentIndex >= totalTracks) {
+                            // ИСПРАВЛЕНО: Успешное завершение теперь корректно красит и подсвечивает нужную кнопку
+                            if (impBox) {
+                                impBox.style.setProperty('border', '1px solid #00ff00', 'important');
+                                impBox.style.setProperty('box-shadow', '0 0 15px #00ff00, inset 0 0 6px #00ff00', 'important');
+                                impBox.style.setProperty('color', '#00ff00', 'important');
+                                let impBtn = impBox.querySelector('.ym-btn');
+                                if (impBtn) impBtn.style.setProperty('color', '#00ff00', 'important');
 
-                        // Возвращаем исходный белый стиль через 1000 мс (1 секунда)
-                        setTimeout(() => {
-                            impBox.style.borderColor = '#ffffff';
-                            impBox.style.boxShadow = '-1px 1px 5px rgba(0,0,0,0.4)';
-                            impBox.style.color = '#ffffff';
-                            if (impBtn) impBtn.style.setProperty('color', '#ffffff', 'important');
-                        }, 1000);
+                                setTimeout(() => {
+                                    impBox.style.borderColor = '#ffffff';
+                                    impBox.style.boxShadow = '-1px 1px 5px rgba(0,0,0,0.4)';
+                                    impBox.style.color = '#ffffff';
+                                    if (impBtn) impBtn.style.setProperty('color', '#ffffff', 'important');
+                                }, 1000);
+                            }
+
+                            if (currentTrackKey) {
+                                let parts = currentTrackKey.split(' — ');
+                                onTrackChanged(parts, parts.slice(1).join(' — '), true);
+                            }
+                            return;
+                        }
+
+                        let tx = db.transaction(['history'], 'readwrite');
+                        let store = tx.objectStore('history');
+                        let limit = Math.min(currentIndex + BATCH_SIZE, totalTracks);
+
+                        for (let i = currentIndex; i < limit; i++) {
+                            store.put(importedData[keys[i]], keys[i]);
+                        }
+
+                        currentIndex = limit;
+
+                        tx.oncomplete = function() {
+                            setTimeout(writeNextBatch, 0);
+                        };
+                        tx.onerror = function() {
+                            alert('Ошибка при импорте пакета данных.');
+                        };
                     }
 
-                    if (currentTrackKey) onTrackChanged(currentTrackKey.split(' — '), currentTrackKey.split(' — '), true);
+                    writeNextBatch();
                 };
 
             } catch(err) {
                 alert('Ошибка: Файл поврежден или имеет неверный формат.');
             }
         };
-        // Теперь передается правильный объект файла (Blob)
-        reader.readAsText(file);
-        event.target.value = ''; // Сбрасываем инпут, чтобы можно было загрузить тот же файл повторно
+        reader.readAsText(file[0]); // ИСПРАВЛЕНО: Явно берем первый файл из коллекции
+        event.target.value = '';
     }
-
 
     function getStatusColor(timestamp) {
         if (!timestamp) return '#8a2be2';
@@ -188,13 +265,12 @@
         if (daysPassed < 366) return '#0066ff';
         return '#8a2be2';
     }
-    // --- ФИНАЛЬНЫЙ CSS МОДУЛЬ: Кристально белый цвет текста (#fff) для всех элементов ---
+
     function injectStyles() {
         if (document.getElementById('ym-autoskip-styles')) return;
         let style = document.createElement('style');
         style.id = 'ym-autoskip-styles';
         style.innerText = `
-            /* Сквозные правила для абсолютно всех текстовых элементов: 9px, центрирование и 100% БЕЛЫЙ ЦВЕТ */
             .ym-base, .ym-base span, .ym-base label, .ym-base button, #ym-range-val {
                 font: normal 9px system-ui, -apple-system, sans-serif !important;
                 color: #ffffff !important;
@@ -205,72 +281,25 @@
                 margin: 0 !important;
                 line-height: 1 !important;
             }
-
             .ym-base { position:fixed!important; background:rgba(20,20,20,0.85)!important; backdrop-filter:blur(4px)!important; border-radius:6px!important; z-index:2147483647!important; box-shadow:-1px 1px 5px rgba(0,0,0,0.4)!important; box-sizing:border-box!important; height:18px!important; padding:2px 3px!important; }
-
-            /* Этаж 1: Окошко настроек автоскипа прижато к правому краю экрана */
             .ym-settings { top:0px!important; right:0px!important; width:auto!important; max-width:287px!important; cursor:default!important; user-select:none!important; pointer-events:auto!important; gap:3px!important; }
-
-            /* Этаж 2 (слева): Окошко статуса трека, смещенное под ширину кнопок */
             .ym-notify { top:19px!important; right:42px!important; width:auto!important; max-width:245px!important; pointer-events:none!important; white-space:nowrap!important; }
-
-            /* Правая вертикальная колонка кнопок у кромки экрана */
             .ym-btn-box { right:0px!important; width:41px!important; padding:0!important; border: 1px solid #ffffff !important;}
             .ym-btn-exp { top:19px!important; }
             .ym-btn-imp { top:38px!important; }
-
             .ym-btn { background:transparent!important; border:none!important; cursor:pointer!important; width:100%!important; height:100%!important; padding:0!important; }
-
             #ym-rng { -webkit-appearance:none!important; background:#555!important; width:100px!important; height:2px!important; cursor:pointer!important; flex-shrink:0!important; outline:none!important; }
             #ym-rng::-webkit-slider-thumb { -webkit-appearance:none!important; width:6px!important; height:6px!important; border-radius:50%!important; background:#fff!important; }
-
             #ym-range-val { width: 25px !important; min-width: 25px !important; }
         `;
         document.head.appendChild(style);
     }
 
-    function simulateHumanKeyPress() {
-        const downEvent = new KeyboardEvent('keydown', cachedKeyEvent);
-        const upEvent = new KeyboardEvent('keyup', cachedKeyEvent);
-
-        window.dispatchEvent(downEvent);
-
-        setTimeout(() => {
-            window.dispatchEvent(upEvent);
-        }, Math.random() * 80 + 40);
-    }
-
-    function skipTrk() {
-        skipsCount++;
-        for (let i = 0; i < liveAudioCollection.length; i++) { liveAudioCollection[i].dataset.ymSkipping = "true"; }
-        simulateHumanKeyPress();
-    }
-
     function updateBorders() {
         let isEnabled = GM_getValue('ym_autoskip_enabled', true);
         let borderStyle = `1px solid ${isEnabled ? '#ffffff' : '#333333'}`;
-
         let settingsBox = document.getElementById('ym-autoskip-box');
         if (settingsBox) settingsBox.style.setProperty('border', borderStyle, 'important');
-
-    }
-
-    function checkAndTriggerSkip() {
-        if (lastPlayedTimestamp && GM_getValue('ym_autoskip_enabled', true)) {
-            if ((((Date.now() - lastPlayedTimestamp) / 86400000) | 0) <= GM_getValue('ym_autoskip_days', 10)) {
-
-                let delay;
-                if (skipsCount > 7) {
-                    delay = Math.random() * 543 + 567;
-                } else {
-                    delay = Math.random() * 321 + 345;
-                }
-
-                setTimeout(skipTrk, delay);
-            } else {
-                skipsCount = 0;
-            }
-        }
     }
 
     function createSettingsBox() {
@@ -360,14 +389,6 @@
     function showNotification(text, isSavedGreen = false, timestamp = null) {
         createSettingsBox();
         let notifyBox = document.getElementById('ym-history-notify');
-        let settingsBox = document.getElementById('ym-autoskip-box');
-        let expBox = document.getElementById('ym-autoskip-exp-box');
-        let impBox = document.getElementById('ym-autoskip-imp-box');
-
-        if (settingsBox && settingsBox.parentElement !== document.body) document.body.appendChild(settingsBox);
-        if (expBox && expBox.parentElement !== document.body) document.body.appendChild(expBox);
-        if (impBox && impBox.parentElement !== document.body) document.body.appendChild(impBox);
-
         if (!notifyBox) {
             notifyBox = document.createElement('div');
             notifyBox.id = 'ym-history-notify';
@@ -395,9 +416,48 @@
         updateBorders();
     }
 
+    function simulateHumanKeyPress() {
+        const downEvent = new KeyboardEvent('keydown', cachedKeyEvent);
+        const upEvent = new KeyboardEvent('keyup', cachedKeyEvent);
+        window.dispatchEvent(downEvent);
+        setTimeout(() => {
+            window.dispatchEvent(upEvent);
+        }, Math.random() * 80 + 40);
+    }
+
+    function skipTrk() {
+        skipsCount++;
+        for (let i = 0; i < liveAudioCollection.length; i++) { liveAudioCollection[i].dataset.ymSkipping = "true"; }
+        simulateHumanKeyPress();
+    }
+
+    function checkAndTriggerSkip() {
+        if (skipTimeoutId) {
+            clearTimeout(skipTimeoutId);
+            skipTimeoutId = null;
+        }
+
+        if (lastPlayedTimestamp && GM_getValue('ym_autoskip_enabled', true)) {
+            if ((((Date.now() - lastPlayedTimestamp) / 86400000) | 0) <= GM_getValue('ym_autoskip_days', 10)) {
+                let delay = skipsCount > 7 ? Math.random() * 543 + 567 : Math.random() * 321 + 345;
+                skipTimeoutId = setTimeout(() => {
+                    skipTrk();
+                    skipTimeoutId = null;
+                }, delay);
+            } else {
+                skipsCount = 0;
+            }
+        }
+    }
+
     function onTrackChanged(title, artist, forceUpdate = false) {
         let trackKey = `${title} — ${artist || 'Неизвестный исполнитель'}`;
         if (trackKey === currentTrackKey && !forceUpdate) return;
+
+        if (skipTimeoutId) {
+            clearTimeout(skipTimeoutId);
+            skipTimeoutId = null;
+        }
 
         currentTrackKey = trackKey;
         isTrackSaved = false;
