@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      40.1
+// @version      40.2
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -187,19 +187,14 @@
         };
     }
 
-    // ИСПРАВЛЕННЫЙ ИМПОРТ: Корректно обрабатывает закрытие транзакций и мигание интерфейса
     function importHistoryFromFile(event) {
         let file = event.target.files;
-        if (!file) return;
-
-        if (!db) {
-            alert('База данных не инициализирована. Обновите страницу.');
-            return;
-        }
+        if (!file || !db) return;
 
         let reader = new FileReader();
         reader.onload = function(e) {
             try {
+                // Для миллионной базы этот шаг потребует памяти, но порционная запись спасет от OOM в IndexedDB
                 let importedData = JSON.parse(e.target.result);
                 let isNewFormatFile = importedData["__version__"] === 2;
                 delete importedData["__version__"];
@@ -207,7 +202,9 @@
                 let keys = Object.keys(importedData);
                 let totalTracks = keys.length;
                 let currentIndex = 0;
-                const BATCH_SIZE = 5000; // Уменьшен размер пачки во избежание блокировок
+
+                // Оптимальный размер пачки для миллиона записей, чтобы Main Thread не блокировался дольше 16мс (1 кадр)
+                const BATCH_SIZE = 1500;
 
                 let impBox = document.getElementById('ym-autoskip-imp-box');
                 if (impBox) {
@@ -221,6 +218,7 @@
                 clearTx.oncomplete = function() {
                     function writeNextBatch() {
                         if (currentIndex >= totalTracks) {
+                            // Успешное завершение
                             if (impBox) {
                                 impBox.style.setProperty('border', '1px solid #00ff00', 'important');
                                 impBox.style.setProperty('box-shadow', '0 0 15px #00ff00, inset 0 0 6px #00ff00', 'important');
@@ -239,6 +237,11 @@
                             if (currentTrackKey) {
                                 onTrackChanged(currentTrackKey, null, true);
                             }
+
+                            // Освобождаем память памяти принудительно
+                            importedData = null;
+                            keys = null;
+
                             alert('Импорт успешно завершен! Обработано треков: ' + totalTracks);
                             return;
                         }
@@ -260,12 +263,15 @@
                         }
 
                         currentIndex = limit;
+
                         tx.oncomplete = function() {
-                            setTimeout(writeNextBatch, 10); // Небольшая задержка для отзывчивости интерфейса
+                            // Небольшой таймаут в 10мс позволяет браузеру обработать клики/клипы в этот момент
+                            setTimeout(writeNextBatch, 10);
                         };
+
                         tx.onerror = function(err) {
-                            console.error('Ошибка записи пачки импорта:', err);
-                            alert('Произошла ошибка при записи данных в IndexedDB.');
+                            console.error('Ошибка IndexedDB при импорте пачки:', err);
+                            alert('Произошла ошибка при записи данных.');
                         };
                     }
 
@@ -279,6 +285,7 @@
         reader.readAsText(file[0]);
         event.target.value = '';
     }
+
 
     function exportHistoryToFile() {
         if (!db) {
@@ -294,11 +301,16 @@
     }
 
     function executeExport() {
+        if (!db) return;
+
         let transaction = db.transaction(['history'], 'readonly');
         let store = transaction.objectStore('history');
         let cursorRequest = store.openCursor();
 
-        let jsonParts = ['{\n"__version__": 2'];
+        let chunks = ['{\n"__version__": 2'];
+        let currentChunk = '';
+        let recordCount = 0;
+
         let expBox = document.getElementById('ym-autoskip-exp-box');
         if (expBox) {
             expBox.style.setProperty('border', '1px solid #ff9900', 'important');
@@ -308,17 +320,24 @@
         cursorRequest.onsuccess = function(event) {
             let cursor = event.target.result;
             if (cursor) {
-                let recordStr = ',\n' + JSON.stringify(cursor.key) + ':' + JSON.stringify(cursor.value);
-                jsonParts.push(recordStr);
+                currentChunk += ',\n' + JSON.stringify(cursor.key) + ':' + JSON.stringify(cursor.value);
+                recordCount++;
 
-                if (jsonParts.length % 5000 === 0) {
+                // Каждые 2000 записей сбрасываем строку в Blob-чанк, освобождая оперативную память
+                if (recordCount % 2000 === 0) {
+                    chunks.push(currentChunk);
+                    currentChunk = '';
+                    // Передаем управление браузеру на 1 микросекунду, чтобы интерфейс не зависал
                     setTimeout(() => cursor.continue(), 0);
                 } else {
                     cursor.continue();
                 }
             } else {
-                jsonParts.push('\n}');
-                let blob = new Blob(jsonParts, { type: 'application/json;charset=utf-8;' });
+                // Финализируем экспорт
+                if (currentChunk) chunks.push(currentChunk);
+                chunks.push('\n}');
+
+                let blob = new Blob(chunks, { type: 'application/json;charset=utf-8;' });
                 let blobUrl = URL.createObjectURL(blob);
 
                 let downloadAnchor = document.createElement('a');
@@ -329,7 +348,10 @@
 
                 document.body.removeChild(downloadAnchor);
                 URL.revokeObjectURL(blobUrl);
-                jsonParts = null;
+
+                // Явно очищаем ссылки для сборщика мусора (GC)
+                chunks = null;
+                currentChunk = null;
 
                 if (expBox) {
                     expBox.style.borderColor = '#ffffff';
@@ -339,94 +361,6 @@
         };
     }
 
-    // ИМПОРТ: Проверяет версию файла и на лету конвертирует старые треки при загрузке
-    function importHistoryFromFile(event) {
-        let file = event.target.files;
-        if (!file || !db) return;
-
-        let reader = new FileReader();
-        reader.onload = function(e) {
-            try {
-                let importedData = JSON.parse(e.target.result);
-
-                // Проверяем, есть ли маркер нового формата в загружаемом файле
-                let isNewFormatFile = importedData["__version__"] === 2;
-
-                // Удаляем служебный ключ, чтобы он не записался в базу как трек
-                delete importedData["__version__"];
-
-                let keys = Object.keys(importedData);
-                let totalTracks = keys.length;
-                let currentIndex = 0;
-                const BATCH_SIZE = 20000;
-
-                let impBox = document.getElementById('ym-autoskip-imp-box');
-                if (impBox) {
-                    impBox.style.setProperty('border', '1px solid #ff9900', 'important');
-                    impBox.style.setProperty('box-shadow', '0 0 10px #ff9900', 'important');
-                }
-
-                let clearTx = db.transaction(['history'], 'readwrite');
-                clearTx.objectStore('history').clear();
-
-                clearTx.oncomplete = function() {
-                    function writeNextBatch() {
-                        if (currentIndex >= totalTracks) {
-                            if (impBox) {
-                                impBox.style.setProperty('border', '1px solid #00ff00', 'important');
-                                impBox.style.setProperty('box-shadow', '0 0 15px #00ff00, inset 0 0 6px #00ff00', 'important');
-                                impBox.style.setProperty('color', '#00ff00', 'important');
-                                let impBtn = impBox.querySelector('.ym-btn');
-                                if (impBtn) impBtn.style.setProperty('color', '#00ff00', 'important');
-
-                                setTimeout(() => {
-                                    impBox.style.borderColor = '#ffffff';
-                                    impBox.style.boxShadow = '-1px 1px 5px rgba(0,0,0,0.4)';
-                                    impBox.style.color = '#ffffff';
-                                    if (impBtn) impBtn.style.setProperty('color', '#ffffff', 'important');
-                                }, 1000);
-                            }
-
-                            if (currentTrackKey) {
-                                onTrackChanged(currentTrackKey, null, true);
-                            }
-                            return;
-                        }
-
-                        let tx = db.transaction(['history'], 'readwrite');
-                        let store = tx.objectStore('history');
-                        let limit = Math.min(currentIndex + BATCH_SIZE, totalTracks);
-
-                        for (let i = currentIndex; i < limit; i++) {
-                            let key = keys[i];
-                            let value = importedData[key];
-
-                            // Если файл старый (v1), на лету переворачиваем строку ключа перед сохранением
-                            if (!isNewFormatFile) {
-                                let parts = key.split(' — ');
-                                key = parts.slice(1).join(' — ') + ' — ' + parts[0];
-                            }
-
-                            store.put(value, key);
-                        }
-
-                        currentIndex = limit;
-
-                        tx.oncomplete = function() {
-                            setTimeout(writeNextBatch, 0);
-                        };
-                    }
-
-                    writeNextBatch();
-                };
-
-            } catch(err) {
-                alert('Ошибка: Файл поврежден или имеет неверный формат.');
-            }
-        };
-        reader.readAsText(file[0]);
-        event.target.value = '';
-    }
     function getStatusColor(timestamp) {
         if (!timestamp) return '#8a2be2';
         let daysPassed = (Date.now() - timestamp) / 86400000;
