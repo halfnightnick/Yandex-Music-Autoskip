@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      41.0
+// @version      42.0
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -588,11 +588,39 @@
         };
     })(document.createElement);
 
+    // --- ОПТИМИЗИРОВАННЫЙ АВТОНОМНЫЙ ПЕРЕХВАТЧИК ВЕРСИЙ С ЗАДЕРЖКОЙ ---
     if (navigator.mediaSession) {
         let originalMetadataSetter = Object.getOwnPropertyDescriptor(MediaSession.prototype, 'metadata').set;
+        let metadataTimeoutId = null;
+
         Object.defineProperty(MediaSession.prototype, 'metadata', {
             set: function(metadata) {
-                if (metadata && metadata.title) { onTrackChanged(metadata.title, metadata.artist); }
+                if (metadata && metadata.title) {
+                    // Сбрасываем предыдущий таймер, если треки переключаются слишком быстро
+                    if (metadataTimeoutId) clearTimeout(metadataTimeoutId);
+
+                    // Даем 50мс интерфейсу Яндекса, чтобы он успел отрисовать версию трека в DOM
+                    metadataTimeoutId = setTimeout(() => {
+                        let title = metadata.title;
+                        let artist = metadata.artist;
+
+                        const playerBar = document.querySelector('.PlayerBar, .player-controls, [class*="PlayerBar_"]');
+                        if (playerBar) {
+                            const playerVisibleText = playerBar.innerText || '';
+                            if (playerVisibleText.includes(title)) {
+                                const versionEl = playerBar.querySelector('.PlayerBar_version, .track__version, .d-track__version, [class*="version"]');
+                                if (versionEl && versionEl.innerText.trim()) {
+                                    let versionText = versionEl.innerText.trim().replace(/^\((.*)\)$/, '$1');
+                                    if (versionText && playerVisibleText.includes(versionText) && !title.includes(versionText)) {
+                                        title = `${title} (${versionText})`;
+                                    }
+                                }
+                            }
+                        }
+                        // Вызываем смену трека один раз с уже финальным именем
+                        onTrackChanged(title, artist);
+                    }, 50);
+                }
                 originalMetadataSetter.call(this, metadata);
             },
             configurable: true
