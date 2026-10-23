@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      42.0
+// @version      42.8
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -30,7 +30,6 @@
 (function() {
     'use strict';
 
-    // --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ СКРИПТА ---
     let skipsCount = 0;
     let currentTrackKey = null;
     let isTrackSaved = false;
@@ -39,11 +38,18 @@
     let isReadyToCheck = false;
     let db = null;
     let skipTimeoutId = null;
+    let metadataTimeoutId = null;
+    let notifyTimeoutId = null;
 
     const liveAudioCollection = document.getElementsByTagName('audio');
     const cachedKeyEvent = { key: 'n', code: 'KeyN', keyCode: 78, which: 78, bubbles: true, cancelable: true };
 
-    // --- ПОБИТОВАЯ МАТЕМАТИКА И ПЛЮРАЛИЗАЦИЯ ---
+    window.addEventListener('beforeunload', () => {
+        if (skipTimeoutId) clearTimeout(skipTimeoutId);
+        if (metadataTimeoutId) clearTimeout(metadataTimeoutId);
+        if (notifyTimeoutId) clearTimeout(notifyTimeoutId);
+    });
+
     const pluralize = (number, form1, form2, form5) => {
         let n = number % 100;
         let n1 = n % 10;
@@ -76,7 +82,6 @@
         if (years < 2) return `${months} ${pluralize(months, 'месяц', 'месяца', 'месяцев')} назад`;
         return `${years} ${pluralize(years, 'год', 'года', 'лет')} назад`;
     }
-    // --- УПРАВЛЕНИЕ ХРАНИЛИЩЕМ INDEXEDDB С ЛЕГКОЙ МИГРАЦИЕЙ СТАРЫХ DАННЫХ ---
     async function initDatabase() {
         if (navigator.storage && navigator.storage.persist) {
             try {
@@ -107,7 +112,6 @@
         request.onsuccess = function(event) {
             db = event.target.result;
 
-            // БЫСТРАЯ МИГРАЦИЯ ИЗ СТАРОГО LOCALSTORAGE (ОБЪЕМ ГАРАНТИРОВАННО < 5 МБ)
             let oldData = GM_getValue('ym_counter_v9', null);
             if (oldData) {
                 try {
@@ -117,10 +121,12 @@
                     const BATCH_SIZE = 2000;
 
                     function writeMigrationBatch() {
-                        if (currentIndex >= keys.length) {
+                        if (!db || currentIndex >= keys.length) {
                             GM_setValue('ym_counter_v9', null);
                             GM_setValue('ym_base_format_v2', true);
                             console.log('YandexMusicAutoskip: Успешная миграция старой базы v9 завершена.');
+                            keys = null;
+                            history = null;
                             if (currentTrackKey) onTrackChanged(currentTrackKey, null, true);
                             return;
                         }
@@ -134,8 +140,7 @@
                             let parts = oldKey.split(' — ');
                             let newKey = oldKey;
 
-                            // Зафиксировано: из формата "Название — Исполнитель" получаем строго "Исполнитель — Название"
-                            if (parts.length > 1 && parts) {
+                            if (parts.length > 1) {
                                 newKey = parts.slice(1).join(' — ') + ' — ' + parts[0];
                             }
                             store.put(history[oldKey], newKey);
@@ -158,7 +163,6 @@
             GM_setValue('ym_base_format_v2', true);
         };
     }
-    // --- ПОТОКОВЫЙ ИМПОРТ БОЛЬШИХ ФАЙЛОВ ---
     function importHistoryFromFile(event) {
         let files = event.target.files;
         if (!files || files.length === 0 || !db) return;
@@ -205,9 +209,11 @@
                         impBox.style.setProperty('box-shadow', '0 0 15px #00ff00, inset 0 0 6px #00ff00', 'important');
                         impBox.style.setProperty('color', '#00ff00', 'important');
                         setTimeout(() => {
-                            impBox.style.borderColor = '#ffffff';
-                            impBox.style.boxShadow = '-1px 1px 5px rgba(0,0,0,0.4)';
-                            impBox.style.color = '#ffffff';
+                            if(impBox) {
+                                impBox.style.borderColor = '#ffffff';
+                                impBox.style.boxShadow = '-1px 1px 5px rgba(0,0,0,0.4)';
+                                impBox.style.color = '#ffffff';
+                            }
                         }, 1500);
                     }
                     if (currentTrackKey) onTrackChanged(currentTrackKey, null, true);
@@ -231,7 +237,6 @@
                     if (rawKey !== "__version__") {
                         let key = rawKey;
                         try {
-                            // Декодируем экранированные слэши JSON обратно в нормальную JS-строку
                             key = JSON.parse('"' + rawKey + '"');
                         } catch(e) {
                             key = rawKey;
@@ -252,6 +257,8 @@
 
                 if (lastIndex > 0) {
                     buffer = buffer.substring(lastIndex);
+                } else if (!isEnd && buffer.length > 8192) {
+                    buffer = "";
                 }
             }
 
@@ -271,7 +278,7 @@
         };
         event.target.value = '';
     }
-    // --- ОПТИМИЗИРОВАННЫЙ ЭКСПОРТ ---
+
     function exportHistoryToFile() {
         if (!db) {
             initDatabase().then(() => executeExport()).catch(() => alert('Ошибка базы данных.'));
@@ -297,6 +304,20 @@
             expBox.style.setProperty('box-shadow', '0 0 10px #ff9900', 'important');
         }
 
+        function cleanExportMemory() {
+            chunks = null;
+            currentChunk = null;
+            if (expBox) {
+                expBox.style.borderColor = '#ffffff';
+                expBox.style.boxShadow = '-1px 1px 5px rgba(0,0,0,0.4)';
+            }
+        }
+
+        cursorRequest.onerror = function() {
+            cleanExportMemory();
+            alert('Ошибка чтения базы данных при экспорте.');
+        };
+
         cursorRequest.onsuccess = function(event) {
             let cursor = event.target.result;
             if (cursor) {
@@ -306,37 +327,32 @@
                 if (recordCount % 5000 === 0) {
                     chunks.push(currentChunk);
                     currentChunk = '';
-                    setTimeout(() => cursor.continue(), 0);
+                    setTimeout(() => { if (cursor) cursor.continue(); }, 0);
                 } else {
                     cursor.continue();
                 }
             } else {
-                if (currentChunk) chunks.push(currentChunk);
-                chunks.push('\n}');
+                try {
+                    if (currentChunk) chunks.push(currentChunk);
+                    chunks.push('\n}');
 
-                let blob = new Blob(chunks, { type: 'application/json;charset=utf-8;' });
-                let blobUrl = URL.createObjectURL(blob);
+                    let blob = new Blob(chunks, { type: 'application/json;charset=utf-8;' });
+                    let blobUrl = URL.createObjectURL(blob);
 
-                let downloadAnchor = document.createElement('a');
-                downloadAnchor.href = blobUrl;
-                downloadAnchor.download = "yandex_music_history.json";
-                document.body.appendChild(downloadAnchor);
-                downloadAnchor.click();
+                    let downloadAnchor = document.createElement('a');
+                    downloadAnchor.href = blobUrl;
+                    downloadAnchor.download = "yandex_music_history.json";
+                    document.body.appendChild(downloadAnchor);
+                    downloadAnchor.click();
 
-                document.body.removeChild(downloadAnchor);
-                URL.revokeObjectURL(blobUrl);
-
-                chunks = null;
-                currentChunk = null;
-
-                if (expBox) {
-                    expBox.style.borderColor = '#ffffff';
-                    expBox.style.boxShadow = '-1px 1px 5px rgba(0,0,0,0.4)';
+                    document.body.removeChild(downloadAnchor);
+                    URL.revokeObjectURL(blobUrl);
+                } finally {
+                    cleanExportMemory();
                 }
             }
         };
     }
-    // --- ИНТЕРФЕЙС И УВЕДОМЛЕНИЯ ---
     function getStatusColor(timestamp) {
         if (!timestamp) return '#8a2be2';
         let daysPassed = (Date.now() - timestamp) / 86400000;
@@ -379,12 +395,11 @@
     }
 
     function createSettingsBox() {
-        let box = document.getElementById('ym-autoskip-box');
-        if (box || !document.body) return;
+        if (document.getElementById('ym-autoskip-box') || !document.body) return;
 
         injectStyles();
 
-        box = document.createElement('div');
+        let box = document.createElement('div');
         box.id = 'ym-autoskip-box';
         box.className = 'ym-base ym-settings';
 
@@ -463,11 +478,12 @@
         impBox.appendChild(fileInput);
         document.body.appendChild(impBox);
     }
-
     function showNotification(text, isSavedGreen = false, timestamp = null) {
         createSettingsBox();
         let notifyBox = document.getElementById('ym-history-notify');
-        if (!notifyBox) {
+
+        if (!notifyBox || !document.body.contains(notifyBox)) {
+            if (notifyBox) notifyBox.remove();
             notifyBox = document.createElement('div');
             notifyBox.id = 'ym-history-notify';
             notifyBox.className = 'ym-base ym-notify';
@@ -481,16 +497,19 @@
         notifyBox.style.cssText = baseStyleAddition;
 
         if (isSavedGreen) {
-            setTimeout(() => {
-                if (notifyBox.innerText === text) {
-                    notifyBox.style.borderColor = isTrackSaved ? '#ffffff' : color;
-                    notifyBox.style.color = 'rgba(255,255,255,1.0)';
-                    notifyBox.style.boxShadow = '-1px 1px 5px rgba(0,0,0,0.4)';
+            if (notifyTimeoutId) clearTimeout(notifyTimeoutId);
+            notifyTimeoutId = setTimeout(() => {
+                let currentNotifyBox = document.getElementById('ym-history-notify');
+                if (currentNotifyBox && document.body.contains(currentNotifyBox)) {
+                    currentNotifyBox.style.borderColor = isTrackSaved ? '#ffffff' : color;
+                    currentNotifyBox.style.color = 'rgba(255,255,255,1.0)';
+                    currentNotifyBox.style.boxShadow = '-1px 1px 5px rgba(0,0,0,0.4)';
                 }
+                notifyTimeoutId = null;
             }, 1000);
         }
     }
-    // --- АВТОПРОПУСК И ОБРАБОТКА ХОДА ВОСПРОИЗВЕДЕНИЯ ---
+
     function simulateHumanKeyPress() {
         const downEvent = new KeyboardEvent('keydown', cachedKeyEvent);
         const upEvent = new KeyboardEvent('keyup', cachedKeyEvent);
@@ -521,7 +540,6 @@
             }
         }
     }
-
     function onTrackChanged(title, artist, forceUpdate = false) {
         let trackKey = artist ? `${artist} — ${title}` : title;
         if (trackKey === currentTrackKey && !forceUpdate) return;
@@ -539,6 +557,9 @@
         let getRequest = store.get(trackKey);
 
         getRequest.onsuccess = function(event) {
+            // ИСПРАВЛЕНО: Защита от Race Condition при быстром перелистывании страниц/треков
+            if (trackKey !== currentTrackKey) return;
+
             let lastPlay = event.target.result;
             if (lastPlay) {
                 lastPlayedTimestamp = parseInt(lastPlay, 10);
@@ -579,27 +600,24 @@
         audio.addEventListener('play', onAudioPlayEvent);
     }
 
-    // Перехват прототипа document
     document.createElement = (function(originalMethod) {
         return function(tagName, options) {
             let element = Reflect.apply(originalMethod, document, arguments);
-            if (tagName && tagName.toLowerCase() === 'audio') { initAudioElement(element); }
+            if (tagName && tagName.toLowerCase() === 'audio') {
+                initAudioElement(element);
+            }
             return element;
         };
     })(document.createElement);
 
-    // --- ОПТИМИЗИРОВАННЫЙ АВТОНОМНЫЙ ПЕРЕХВАТЧИК ВЕРСИЙ С ЗАДЕРЖКОЙ ---
     if (navigator.mediaSession) {
         let originalMetadataSetter = Object.getOwnPropertyDescriptor(MediaSession.prototype, 'metadata').set;
-        let metadataTimeoutId = null;
 
         Object.defineProperty(MediaSession.prototype, 'metadata', {
             set: function(metadata) {
                 if (metadata && metadata.title) {
-                    // Сбрасываем предыдущий таймер, если треки переключаются слишком быстро
                     if (metadataTimeoutId) clearTimeout(metadataTimeoutId);
 
-                    // Даем 50мс интерфейсу Яндекса, чтобы он успел отрисовать версию трека в DOM
                     metadataTimeoutId = setTimeout(() => {
                         let title = metadata.title;
                         let artist = metadata.artist;
@@ -617,8 +635,8 @@
                                 }
                             }
                         }
-                        // Вызываем смену трека один раз с уже финальным именем
                         onTrackChanged(title, artist);
+                        metadataTimeoutId = null;
                     }, 50);
                 }
                 originalMetadataSetter.call(this, metadata);
