@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      42.8
+// @version      42.9
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -72,14 +72,14 @@
         if (hours < 24) return `${hours} ${pluralize(hours, 'час', 'часа', 'часов')} назад`;
 
         let days = (hours / 24) | 0;
-        if (days < 14) return `${days} ${pluralize(days, 'день', 'дня', 'дней')} назад`;
+        if (days < 21) return `${days} ${pluralize(days, 'день', 'дня', 'дней')} назад`;
 
         let weeks = (days / 7) | 0;
         let months = (days / 30.44) | 0;
         let years = (days / 365.25) | 0;
 
-        if (months < 2) return `${weeks} ${pluralize(weeks, 'неделю', 'недели', 'недель')} назад`;
-        if (years < 2) return `${months} ${pluralize(months, 'месяц', 'месяца', 'месяцев')} назад`;
+        if (months < 3) return `${weeks} ${pluralize(weeks, 'неделю', 'недели', 'недель')} назад`;
+        if (years < 3) return `${months} ${pluralize(months, 'месяц', 'месяца', 'месяцев')} назад`;
         return `${years} ${pluralize(years, 'год', 'года', 'лет')} назад`;
     }
     async function initDatabase() {
@@ -358,7 +358,7 @@
         let daysPassed = (Date.now() - timestamp) / 86400000;
         if (daysPassed < 11) return '#ff3333';
         if (daysPassed < 21) return '#ff9900';
-        if (daysPassed < 31) return '#ffff00';
+        if (daysPassed < 42) return '#ffff00';
         if (daysPassed < 92) return '#00ff00';
         if (daysPassed < 183) return '#00ffff';
         if (daysPassed < 366) return '#0066ff';
