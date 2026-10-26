@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      42.11
+// @version      42.12
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -196,98 +196,94 @@
     async function importHistoryFromFile(event) {
         const files = event.target.files;
         if (!files || files.length === 0 || !db) return;
-        const file = files[0]; // Извлекаем файл корректно // cite: 1
+        const file = files[0]; // Извлекаем файл корректно
 
-        const impBox = document.getElementById('ym-autoskip-imp-box'); // cite: 1
-        if (impBox) { // cite: 1
-            impBox.style.setProperty('border', '1px solid #ff9900', 'important'); // cite: 1
-            impBox.style.setProperty('box-shadow', '0 0 10px #ff9900', 'important'); // cite: 1
-        } // cite: 1
+        const impBox = document.getElementById('ym-autoskip-imp-box');
+        if (impBox) {
+            impBox.style.setProperty('border', '1px solid #ff9900', 'important');
+            impBox.style.setProperty('box-shadow', '0 0 10px #ff9900', 'important');
+        }
 
-        // Очистку базы выполняем в изолированной стартовой транзакции // cite: 1
-        const clearTx = db.transaction(['history'], 'readwrite'); // cite: 1
-        clearTx.objectStore('history').clear(); // cite: 1
+        // Очистку базы выполняем в изолированной стартовой транзакции
+        const clearTx = db.transaction(['history'], 'readwrite');
+        clearTx.objectStore('history').clear();
 
-        clearTx.oncomplete = async function() { // cite: 1
-            let totalTracks = 0; // cite: 1
-            let batchIdx = 0; // cite: 1
-            const BATCH_LIMIT = 3000; // Ровно 3000 треков на одну транзакцию // cite: 1
+        clearTx.oncomplete = async function() {
+            let totalTracks = 0;
+            let batchIdx = 0;
+            const BATCH_LIMIT = 3000; // Ровно 3000 треков на одну транзакцию
 
-            let keysBatch = new Array(BATCH_LIMIT).fill(null); // cite: 1
-            let valsBatch = new Float64Array(BATCH_LIMIT); // cite: 1
+            let keysBatch = new Array(BATCH_LIMIT).fill(null);
+            let valsBatch = new Array(BATCH_LIMIT).fill(0);
 
             try {
-                // Нативное чтение всего файла браузером в валидную UTF-8 строку за одну операцию // cite: 1
-                const fileText = await file.text(); // cite: 1
-
-                // Ваша ОРИГИНАЛЬНАЯ, доказавшая годами надежность регулярка // cite: 1
-                const regex = /"((?:[^"\\]|\\.)*)"\s*:\s*([0-9]+)/g; // cite: 1
+                // Нативное чтение всего файла браузером в валидную UTF-8 строку за одну операцию
+                const fileText = await file.text();
+               const regex = /"((?:[^"\\]|\\.)*)"\s*:\s*([0-9]+)/g;
 
                 let match;
-                // ИДЕАЛЬНЫЙ ЦИКЛ: Чистый вызов exec() работает напрямую с регистрами памяти // cite: 1
-                while ((match = regex.exec(fileText)) !== null) { // cite: 1
-                    const rawKeyInside = match[1]; // Ваша оригинальная первая группа (чистый текст) // cite: 1
-                    if (rawKeyInside === "__version__") continue; // cite: 1
+                // ИДЕАЛЬНЫЙ ЦИКЛ: Чистый вызов exec() работает напрямую с регистрами памяти
+                while ((match = regex.exec(fileText)) !== null) {
+                    const rawKeyInside = match[1];
+                    if (rawKeyInside === "__version__") continue;
 
                     try {
-                        // ВЕРНУТО: Ваша нативная и 100% рабочая логика разэкранирования строк из первой версии!
-                        // Мы просто склеиваем кавычки вокруг вашей оригинальной группы захвата.
-                        const key = JSON.parse('"' + rawKeyInside + '"'); // cite: 1
-                        const val = parseInt(match[2], 10); // Ваша оригинальная вторая группа (число) // cite: 1
+                        const key = JSON.parse('"' + rawKeyInside + '"');
+                        const val = parseInt(match[2], 10);
 
-                        if (key && !isNaN(val)) { // cite: 1
-                            keysBatch[batchIdx] = key; // cite: 1
-                            valsBatch[batchIdx] = val; // cite: 1
-                            batchIdx++; // cite: 1
-                            totalTracks++; // cite: 1
-                        } // cite: 1
+                        if (key && !isNaN(val)) {
+                            keysBatch[batchIdx] = key;
+                            valsBatch[batchIdx] = val;
+                            batchIdx++;
+                            totalTracks++;
+                        }
 
-                        if (batchIdx >= BATCH_LIMIT) { // cite: 1
-                            // Отправляем пачку в IndexedDB // cite: 1
-                            writeBatchToDB(db, keysBatch, valsBatch, batchIdx); // cite: 1
+                        if (batchIdx >= BATCH_LIMIT) {
+                            // Отправляем пачку в IndexedDB
+                            writeBatchToDB(db, keysBatch, valsBatch, batchIdx);
 
-                            // Выделяем новые буферы для следующей пачки // cite: 1
-                            keysBatch = new Array(BATCH_LIMIT).fill(null); // cite: 1
-                            valsBatch = new Float64Array(BATCH_LIMIT); // cite: 1
-                            batchIdx = 0; // cite: 1
+                            // Выделяем новые буферы для следующей пачки
+                            keysBatch = new Array(BATCH_LIMIT).fill(null);
+                            valsBatch = new Float64Array(BATCH_LIMIT);
+                            batchIdx = 0;
 
-                            // Асинхронный разрыв (Event Loop) — плеер Яндекс Музыки гарантированно не заикается // cite: 1
-                            await new Promise(resolve => setTimeout(resolve, 0)); // cite: 1
+                            // Асинхронный разрыв (Event Loop) — плеер Яндекс Музыки гарантированно не заикается
+                            await new Promise(resolve => setTimeout(resolve, 0));
                         }
                     } catch (e) {
-                        console.warn('YandexMusicAutoskip: Пропущен поврежденный трек:', rawKeyInside, e); // cite: 1
+                        console.warn('YandexMusicAutoskip: Пропущен поврежденный трек:', rawKeyInside, e);
                     }
                 }
 
-                // Записываем финальный остаток бэкапа // cite: 1
-                if (batchIdx > 0) { // cite: 1
-                    writeBatchToDB(db, keysBatch, valsBatch, batchIdx); // cite: 1
-                } // cite: 1
+                // Записываем финальный остаток бэкапа
+                if (batchIdx > 0) {
+                    writeBatchToDB(db, keysBatch, valsBatch, batchIdx);
+                }
 
-                if (impBox) { // cite: 1
-                    impBox.style.setProperty('border', '1px solid #00ff00', 'important'); // cite: 1
-                    impBox.style.setProperty('box-shadow', '0 0 15px #00ff00, inset 0 0 6px #00ff00', 'important'); // cite: 1
-                    impBox.style.setProperty('color', '#00ff00', 'important'); // cite: 1
-                    setTimeout(() => { // cite: 1
-                        if(impBox) { // cite: 1
-                            impBox.style.borderColor = '#ffffff'; // cite: 1
-                            impBox.style.boxShadow = '-1px 1px 5px rgba(0,0,0,0.4)'; // cite: 1
-                            impBox.style.color = '#ffffff'; // cite: 1
-                        } // cite: 1
-                    }, 1500); // cite: 1
-                } // cite: 1
-                if (currentTrackKey) onTrackChanged(currentTrackKey, null, true); // cite: 1
-                alert('Импорт завершен! Успешно восстановлено треков: ' + totalTracks); // cite: 1
+                if (impBox) {
+                    impBox.style.setProperty('border', '1px solid #00ff00', 'important');
+                    impBox.style.setProperty('box-shadow', '0 0 15px #00ff00, inset 0 0 6px #00ff00', 'important');
+                    impBox.style.setProperty('color', '#00ff00', 'important');
+                    setTimeout(() => {
+                        if(impBox) {
+                            impBox.style.borderColor = '#ffffff';
+                            impBox.style.boxShadow = '-1px 1px 5px rgba(0,0,0,0.4)';
+                            impBox.style.color = '#ffffff';
+                        }
+                    }, 1500);
+                }
+                if (currentTrackKey) onTrackChanged(currentTrackKey, null, true);
+                alert('Импорт завершен! Успешно восстановлено треков: ' + totalTracks);
 
-            } catch (err) { // cite: 1
-                console.error('Критическая ошибка импорта:', err); // cite: 1
-                alert('Ошибка при импорте файла.'); // cite: 1
-            } finally { // cite: 1
-                keysBatch = null; // cite: 1
-                valsBatch = null; // cite: 1
-            } // cite: 1
-        }; // cite: 1
-        event.target.value = ''; // cite: 1
+            } catch (err) {
+                console.error('Критическая ошибка импорта:', err);
+                alert('Ошибка при импорте файла.');
+            } finally {
+                keysBatch = null;
+                valsBatch = null;
+            }
+        };
+        event.target.value = '';
     }
 
     function exportHistoryToFile() {
@@ -332,7 +328,8 @@
         cursorRequest.onsuccess = function(event) {
             let cursor = event.target.result;
             if (cursor) {
-                currentChunk += ',\n' + JSON.stringify(cursor.key) + ':' + cursor.value;
+                // ВМЕСТО: ... + ':' + cursor.value;
+                currentChunk += ',\n' + JSON.stringify(cursor.key) + ':' + String(cursor.value).trim();
                 recordCount++;
 
                 if (recordCount % 5000 === 0) {
