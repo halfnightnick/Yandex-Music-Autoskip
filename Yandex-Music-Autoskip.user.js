@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      42.12
+// @version      42.13
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -214,7 +214,7 @@
             const BATCH_LIMIT = 3000; // Ровно 3000 треков на одну транзакцию
 
             let keysBatch = new Array(BATCH_LIMIT).fill(null);
-            let valsBatch = new Array(BATCH_LIMIT).fill(0);
+            let valsBatch = new Array(BATCH_LIMIT).fill(null);
 
             try {
                 // Нативное чтение всего файла браузером в валидную UTF-8 строку за одну операцию
@@ -244,7 +244,7 @@
 
                             // Выделяем новые буферы для следующей пачки
                             keysBatch = new Array(BATCH_LIMIT).fill(null);
-                            valsBatch = new Float64Array(BATCH_LIMIT);
+                            valsBatch = new Array(BATCH_LIMIT).fill(null);
                             batchIdx = 0;
 
                             // Асинхронный разрыв (Event Loop) — плеер Яндекс Музыки гарантированно не заикается
