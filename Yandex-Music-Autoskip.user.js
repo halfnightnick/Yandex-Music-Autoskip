@@ -540,7 +540,7 @@
         if (skipTimeoutId) { clearTimeout(skipTimeoutId); skipTimeoutId = null; }
 
         if (lastPlayedTimestamp && GM_getValue('ym_autoskip_enabled', true)) {
-            if ((((Date.now() - lastPlayedTimestamp) / 86400000) | 0) <= GM_getValue('ym_autoskip_days', 10)) {
+            if (Math.floor((Date.now() - lastPlayedTimestamp) / 86400000) <= GM_getValue('ym_autoskip_days', 10)) {
                 let delay = skipsCount > 7 ? Math.random() * 543 + 567 : Math.random() * 321 + 345;
                 skipTimeoutId = setTimeout(() => {
                     skipTrk();
@@ -611,15 +611,12 @@
         audio.addEventListener('play', onAudioPlayEvent);
     }
 
-    document.createElement = (function(originalMethod) {
-        return function(tagName, options) {
-            let element = Reflect.apply(originalMethod, document, arguments);
-            if (tagName && tagName.toLowerCase() === 'audio') {
-                initAudioElement(element);
-            }
-            return element;
-        };
-    })(document.createElement);
+    const orgCreate = document.createElement;
+    document.createElement = function(tag, opt) {
+        const el = Reflect.apply(orgCreate, document, arguments);
+        if (tag && tag.toLowerCase() === 'audio') initAudioElement(el);
+        return el;
+    };
 
     if (navigator.mediaSession) {
         let originalMetadataSetter = Object.getOwnPropertyDescriptor(MediaSession.prototype, 'metadata').set;
