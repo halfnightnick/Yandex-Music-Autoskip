@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      42.15
+// @version      42.16
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -581,14 +581,15 @@
     function checkPlaybackProgress(event) {
         if (!currentTrackKey || isTrackSaved || !event.target.duration || event.target.dataset.ymSkipping === "true") return;
         let midpoint = event.target.duration / 2;
-        if (event.target.currentTime >= midpoint && event.target.currentTime <= midpoint + 2) {
-            isTrackSaved = true;
+        if (event.target.currentTime >= midpoint && event.target.currentTime <= midpoint + 5) {
             let now = Date.now();
             if (db) {
                 let transaction = db.transaction(['history'], 'readwrite');
                 transaction.objectStore('history').put(now, currentTrackKey);
             }
+            isTrackSaved = true;
             showNotification(statusText, true, now);
+            activeAudio.removeEventListener('timeupdate', checkPlaybackProgress);
         }
     }
 
@@ -608,9 +609,12 @@
 
     const orgCreate = document.createElement;
     document.createElement = function(tag, opt) {
-        activeAudio = Reflect.apply(orgCreate, document, arguments);
-        if (tag && tag.toLowerCase() === 'audio') initAudioElement();
-        return activeAudio;
+        const element = Reflect.apply(orgCreate, document, arguments);
+        if (tag && tag.toLowerCase() === 'audio') {
+            activeAudio = element;
+            initAudioElement();
+        }
+        return element;
     };
 
     if (navigator.mediaSession) {
