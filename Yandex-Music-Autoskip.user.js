@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      42.14
+// @version      42.15
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -40,8 +40,8 @@
     let skipTimeoutId = null;
     let metadataTimeoutId = null;
     let notifyTimeoutId = null;
+    let activeAudio = null;
 
-    const liveAudioCollection = document.getElementsByTagName('audio');
     const cachedKeyEvent = { key: 'n', code: 'KeyN', keyCode: 78, which: 78, bubbles: true, cancelable: true };
 
     window.addEventListener('beforeunload', () => {
@@ -525,7 +525,9 @@
 
     function skipTrk() {
         skipsCount++;
-        for (let i = 0; i < liveAudioCollection.length; i++) { liveAudioCollection[i].dataset.ymSkipping = "true"; }
+        if (activeAudio) {
+            activeAudio.dataset.ymSkipping = "true";
+        }
         simulateHumanKeyPress();
     }
 
@@ -597,18 +599,18 @@
         }
     }
 
-    function initAudioElement(audio) {
-        if (audio.dataset.ymM) return;
-        audio.dataset.ymM = "true";
-        audio.addEventListener('timeupdate', checkPlaybackProgress);
-        audio.addEventListener('play', onAudioPlayEvent);
+    function initAudioElement() {
+        if (activeAudio.dataset.ymM) return;
+        activeAudio.dataset.ymM = "true";
+        activeAudio.addEventListener('timeupdate', checkPlaybackProgress);
+        activeAudio.addEventListener('play', onAudioPlayEvent);
     }
 
     const orgCreate = document.createElement;
     document.createElement = function(tag, opt) {
-        const el = Reflect.apply(orgCreate, document, arguments);
-        if (tag && tag.toLowerCase() === 'audio') initAudioElement(el);
-        return el;
+        activeAudio = Reflect.apply(orgCreate, document, arguments);
+        if (tag && tag.toLowerCase() === 'audio') initAudioElement();
+        return activeAudio;
     };
 
     if (navigator.mediaSession) {
