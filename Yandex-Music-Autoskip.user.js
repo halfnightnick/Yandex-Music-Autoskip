@@ -1,27 +1,13 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      43.0
+// @version      44.0
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
 // @author       halfnightnick
 // @icon         https://music.yandex.ru/favicon.svg
 // @icon64       https://music.yandex.ru/favicon.svg
-// @match        *://music.yandex.ru/*
-// @match        *://music.yandex.by/*
-// @match        *://music.yandex.kz/*
-// @match        *://music.yandex.uz/*
-// @match        *://music.yandex.com/*
-// @match        *://music.yandex.com.am/*
-// @match        *://music.yandex.com.ge/*
-// @match        *://music.yandex.com.tr/*
-// @match        *://music.yandex.az/*
-// @match        *://music.yandex.md/*
-// @match        *://music.yandex.tj/*
-// @match        *://music.yandex.tm/*
-// @match        *://music.yandex.kg/*
-// @match        *://music.yandex.ua/*
 // @include      *://music.yandex.*/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -36,21 +22,12 @@
     let isTrackSaved = false;
     let lastPlayedTimestamp = null;
     let statusText = 'Трек играет впервые';
-    let isReadyToCheck = false;
     let db = null;
     let skipTimeoutId = null;
-    let metadataTimeoutId = null;
     let notifyTimeoutId = null;
-    let activeAudio = null;
     let ymSkipping = false;
 
     const cachedKeyEvent = { key: 'n', code: 'KeyN', keyCode: 78, which: 78, bubbles: true, cancelable: true };
-
-    window.addEventListener('beforeunload', () => {
-        if (skipTimeoutId) clearTimeout(skipTimeoutId);
-        if (metadataTimeoutId) clearTimeout(metadataTimeoutId);
-        if (notifyTimeoutId) clearTimeout(notifyTimeoutId);
-    });
 
     const pluralize = (number, form1, form2, form5) => {
         let n = number % 100;
@@ -374,7 +351,7 @@
         checkbox.addEventListener('change', (e) => {
             GM_setValue('ym_autoskip_enabled', e.target.checked);
             box.style.border = `1px solid ${e.target.checked ? '#ffffff' : '#333333'}`;
-            if (e.target.checked && ymSkipping !== "true") checkAndTriggerSkip();
+            if (e.target.checked && ymSkipping !== true) checkAndTriggerSkip();
         });
         label.appendChild(checkbox);
         label.appendChild(labelText);
@@ -393,7 +370,7 @@
         rangeInput.addEventListener('input', (e) => {
             GM_setValue('ym_autoskip_days', parseInt(e.target.value, 10));
             rangeValueDisplay.innerText = `${e.target.value} дн.`;
-            if (ymSkipping !== "true") checkAndTriggerSkip();
+            if (ymSkipping !== true) checkAndTriggerSkip();
         });
         box.appendChild(rangeInput);
         box.appendChild(rangeValueDisplay);
@@ -462,11 +439,9 @@
     }
 
     function skipTrk() {
-        if (activeAudio) {
-            skipsCount++;
-            ymSkipping = "true";
-            simulateHumanKeyPress();
-        }
+        skipsCount++;
+        ymSkipping = true;
+        simulateHumanKeyPress();
     }
 
     function checkAndTriggerSkip() {
@@ -487,26 +462,24 @@
         }
     }
 
-    function onTrackChanged(title, artist, forceUpdate = false) {
-        let trackKey = artist ? `${artist} — ${title}` : title;
+    function onTrackChanged(trackKey, forceUpdate = false) {
         if (trackKey === currentTrackKey && !forceUpdate) return;
         if (skipTimeoutId) { clearTimeout(skipTimeoutId); skipTimeoutId = null; }
         currentTrackKey = trackKey;
         isTrackSaved = false;
+        ymSkipping = false;
         if (!db) return;
         let transaction = db.transaction(['history'], 'readonly');
         let store = transaction.objectStore('history');
         let getRequest = store.get(trackKey);
-
         getRequest.onsuccess = function(event) {
             if (trackKey !== currentTrackKey) return;
             let lastPlay = event.target.result;
             if (lastPlay) {
                 lastPlayedTimestamp = parseInt(lastPlay, 10);
                 statusText = `Последний раз трек играл ${getRelativeTimeStr(lastPlayedTimestamp)}`;
-                if (isReadyToCheck && ymSkipping !== "true") {
+                if (!ymSkipping) {
                     checkAndTriggerSkip();
-                    isReadyToCheck = false;
                 }
             } else {
                 statusText = 'Трек играет впервые';
@@ -516,66 +489,49 @@
         };
     }
 
-    function checkPlaybackProgress(event) {
-        if (!currentTrackKey || isTrackSaved || !event.target.duration || ymSkipping === "true") return;
-        let midpoint = event.target.duration / 2;
-        if (event.target.currentTime >= midpoint && event.target.currentTime <= midpoint + 5) {
-            let now = Date.now();
-            if (db) {
-                let transaction = db.transaction(['history'], 'readwrite');
-                transaction.objectStore('history').put(now, currentTrackKey);
+    window.addEventListener('message', (event) => {
+        if (!event.data || event.data.source !== 'ym-bridge-page' || event.data.kind !== 'metadata-heartbeat') return;
+        try {
+            const artist = event.data.artist;
+            let track = event.data.track;
+            if (!track) return;
+            let versionText = event.data.snapshot?.entity?.version?.trim();
+            if (versionText && !track.includes(versionText)) {
+                track = `${track} (${versionText})`;
             }
-            isTrackSaved = true;
-            showNotification(statusText, true, now);
-            activeAudio.removeEventListener('timeupdate', checkPlaybackProgress);
-        }
-    }
-
-    const originalPlay = HTMLMediaElement.prototype.play;
-    HTMLMediaElement.prototype.play = function() {
-        if (this.tagName === 'AUDIO') {
-            if (activeAudio !== this) {
-                activeAudio = this;
-                activeAudio.addEventListener('timeupdate', checkPlaybackProgress);
+            const trackKey = artist ? `${artist} — ${track}` : track;
+            if (trackKey !== currentTrackKey) {
+                onTrackChanged(trackKey);
             }
-            ymSkipping = "false";
-            isReadyToCheck = true;
-        }
-        return originalPlay.apply(this, arguments);
-    };
-
-    if (navigator.mediaSession) {
-        let originalMetadataSetter = Object.getOwnPropertyDescriptor(MediaSession.prototype, 'metadata').set;
-        Object.defineProperty(MediaSession.prototype, 'metadata', {
-            set: function(metadata) {
-                if (metadata && metadata.title) {
-                    if (metadataTimeoutId) clearTimeout(metadataTimeoutId);
-                    metadataTimeoutId = setTimeout(() => {
-                        let title = metadata.title;
-                        let artist = metadata.artist;
-                        const playerBar = document.querySelector('.PlayerBar, .player-controls, [class*="PlayerBar_"]');
-                        if (playerBar) {
-                            const playerVisibleText = playerBar.innerText || '';
-                            if (playerVisibleText.includes(title)) {
-                                const versionEl = playerBar.querySelector('.PlayerBar_version, .track__version, .d-track__version, [class*="version"]');
-                                if (versionEl && versionEl.innerText.trim()) {
-                                    let versionText = versionEl.innerText.trim().replace(/^\((.*)\)$/, '$1');
-                                    if (versionText && playerVisibleText.includes(versionText) && !title.includes(versionText)) {
-                                        title = `${title} (${versionText})`;
-                                    }
-                                }
-                            }
-                        }
-                        onTrackChanged(title, artist);
-                        metadataTimeoutId = null;
-                    }, 50);
+            const playback = event.data.snapshot?.playback;
+            if (!playback) return;
+            if (ymSkipping || isTrackSaved) return;
+            if (playback.state === 'paused') return;
+            const currentTime = Number(playback.positionSeconds);
+            const duration = Number(playback.durationSeconds);
+            if (isNaN(currentTime) || isNaN(duration) || duration <= 0) return;
+            let midpoint = duration / 2;
+            if (currentTime >= midpoint && currentTime <= midpoint + 5) {
+                let now = Date.now();
+                if (db) {
+                    let transaction = db.transaction(['history'], 'readwrite');
+                    transaction.objectStore('history').put(now, currentTrackKey);
                 }
-                originalMetadataSetter.call(this, metadata);
-            },
-            configurable: true
-        });
-    }
+                isTrackSaved = true;
+                showNotification(statusText, true, now);
+                console.log("YandexMusicAutoskip: Трек успешно сохранен по данным ym-bridge:", currentTrackKey);
+            }
+        } catch (e) {
+            console.error("YandexMusicAutoskip: Ошибка обработки сообщения Яндекса", e);
+        }
+    });
+
+    window.addEventListener('beforeunload', () => {
+        if (skipTimeoutId) clearTimeout(skipTimeoutId);
+        if (notifyTimeoutId) clearTimeout(notifyTimeoutId);
+    });
 
     initDatabase();
+
     if (document.body) { createSettingsBox(); } else { window.addEventListener('DOMContentLoaded', createSettingsBox); }
 })();
