@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      45.1
+// @version      45.2
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -506,12 +506,29 @@
                 const audio = this;
                 if (!audio._ym_autoskip_tracked) {
                     audio._ym_autoskip_tracked = true;
-                    audio._ym_last_checked_second = -1;
-                    audio.addEventListener('timeupdate', () => {
+                    let midpointTimeoutId = null;
+
+                    const planMidpointCheck = () => {
+                        if (midpointTimeoutId) clearTimeout(midpointTimeoutId);
+                        const duration = audio.duration;
                         const currentTime = audio.currentTime;
-                        const currentSecond = Math.floor(currentTime);
-                        if (audio._ym_last_checked_second === currentSecond) return;
-                        audio._ym_last_checked_second = currentSecond;
+                        if (isNaN(currentTime) || isNaN(duration) || duration <= 0) return;
+                        const midpoint = duration / 2;
+                        updateCurrentTrackKey();
+                        if (currentTime < midpoint) {
+                            const timeToWaitMs = (midpoint - currentTime) * 1000;
+                            midpointTimeoutId = setTimeout(() => {
+                                if (!audio.paused && Math.abs(audio.currentTime - midpoint) < 3) {
+                                    triggerMidpointSave();
+                                }
+                            }, timeToWaitMs);
+                        }
+                        else if (currentTime >= midpoint && currentTime <= midpoint + 5) {
+                            triggerMidpointSave();
+                        }
+                    };
+
+                    const updateCurrentTrackKey = () => {
                         if (!navigator.mediaSession || !navigator.mediaSession.metadata) return;
                         let title = navigator.mediaSession.metadata.title;
                         if (!title) return;
@@ -534,19 +551,26 @@
                         if (trackKey !== currentTrackKey) {
                             onTrackChanged(trackKey);
                         }
+                    };
+
+                    const triggerMidpointSave = () => {
                         if (ymSkipping || isTrackSaved) return;
-                        const duration = audio.duration;
-                        if (isNaN(currentTime) || isNaN(duration) || duration <= 0) return;
-                        const midpoint = duration / 2;
-                        if (currentTime >= midpoint && currentTime <= midpoint + 5) {
-                            const now = Date.now();
-                            if (db) {
-                                const transaction = db.transaction(['history'], 'readwrite');
-                                transaction.objectStore('history').put(now, currentTrackKey);
-                            }
-                            isTrackSaved = true;
-                            showNotification(statusText, true, now);
+                        updateCurrentTrackKey();
+                        const now = Date.now();
+                        if (db) {
+                            const transaction = db.transaction(['history'], 'readwrite');
+                            transaction.objectStore('history').put(now, currentTrackKey);
                         }
+                        isTrackSaved = true;
+                        showNotification(statusText, true, now);
+                    };
+
+                    audio.addEventListener('loadedmetadata', planMidpointCheck);
+                    audio.addEventListener('play', planMidpointCheck);
+                    audio.addEventListener('playing', planMidpointCheck);
+                    audio.addEventListener('seeked', planMidpointCheck);
+                    audio.addEventListener('pause', () => {
+                        if (midpointTimeoutId) clearTimeout(midpointTimeoutId);
                     });
                 }
                 return origPlay.apply(this, args);
