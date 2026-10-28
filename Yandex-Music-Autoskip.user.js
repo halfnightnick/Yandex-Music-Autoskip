@@ -468,7 +468,24 @@
         currentTrackKey = trackKey;
         isTrackSaved = false;
         ymSkipping = false;
-        if (!db) return;
+
+        // ПОДСТРАХОВКА: Если база данных еще не загрузилась, сразу показываем базовое окно
+        if (!db) {
+            statusText = 'Трек играет впервые';
+            lastPlayedTimestamp = null;
+            showNotification(statusText, false, null);
+
+            // Проверяем готовность базы повторно каждые 100мс, пока она не загрузится
+            let checkDbInterval = setInterval(() => {
+                if (db) {
+                    clearInterval(checkDbInterval);
+                    // Перезапускаем функцию для получения точных данных из базы
+                    onTrackChanged(trackKey, true);
+                }
+            }, 100);
+            return;
+        }
+
         let transaction = db.transaction(['history'], 'readonly');
         let store = transaction.objectStore('history');
         let getRequest = store.get(trackKey);
@@ -489,42 +506,71 @@
         };
     }
 
-    window.addEventListener('message', (event) => {
-        if (!event.data || event.data.source !== 'ym-bridge-page' || event.data.kind !== 'metadata-heartbeat') return;
+    function initHtml5AudioTracking() {
         try {
-            const artist = event.data.artist;
-            let track = event.data.track;
-            if (!track) return;
-            let versionText = event.data.snapshot?.entity?.version?.trim();
-            if (versionText && !track.includes(versionText)) {
-                track = `${track} (${versionText})`;
-            }
-            const trackKey = artist ? `${artist} — ${track}` : track;
-            if (trackKey !== currentTrackKey) {
-                onTrackChanged(trackKey);
-            }
-            const playback = event.data.snapshot?.playback;
-            if (!playback) return;
-            if (ymSkipping || isTrackSaved) return;
-            if (playback.state === 'paused') return;
-            const currentTime = Number(playback.positionSeconds);
-            const duration = Number(playback.durationSeconds);
-            if (isNaN(currentTime) || isNaN(duration) || duration <= 0) return;
-            let midpoint = duration / 2;
-            if (currentTime >= midpoint && currentTime <= midpoint + 5) {
-                let now = Date.now();
-                if (db) {
-                    let transaction = db.transaction(['history'], 'readwrite');
-                    transaction.objectStore('history').put(now, currentTrackKey);
+            const origPlay = HTMLAudioElement.prototype.play;
+            HTMLAudioElement.prototype.play = function (...args) {
+                const audio = this;
+
+                if (!audio._ym_autoskip_tracked) {
+                    audio._ym_autoskip_tracked = true;
+
+                    audio.addEventListener('timeupdate', () => {
+                        if (!navigator.mediaSession || !navigator.mediaSession.metadata) return;
+
+                        let title = navigator.mediaSession.metadata.title;
+                        const artist = navigator.mediaSession.metadata.artist || '';
+
+                        if (!title) return;
+
+                       const playerBar = document.querySelector('.PlayerBar, .player-controls, [class*="PlayerBar_"]');
+                       if (playerBar) {
+                           const playerVisibleText = playerBar.innerText || '';
+                           if (playerVisibleText.includes(title)) {
+                               const versionEl = playerBar.querySelector('.PlayerBar_version, .track__version, .d-track__version, [class*="version"]');
+                               if (versionEl && versionEl.innerText.trim()) {
+                                   let versionText = versionEl.innerText.trim().replace(/^\((.*)\)$/, '$1');
+                                   if (versionText && playerVisibleText.includes(versionText) && !title.includes(versionText)) title = `${title} (${versionText})`;
+                                }
+                            }
+                        }
+                        const trackKey = artist ? `${artist} — ${title}` : title;
+
+                        // Если трек или его версия сменились
+                        if (trackKey !== currentTrackKey) {
+                            onTrackChanged(trackKey);
+                        }
+
+                        // Логика фиксации середины трека
+                        if (ymSkipping || isTrackSaved) return;
+
+                        const currentTime = audio.currentTime;
+                        const duration = audio.duration;
+                        if (isNaN(currentTime) || isNaN(duration) || duration <= 0) return;
+
+                        const midpoint = duration / 2;
+                        if (currentTime >= midpoint && currentTime <= midpoint + 5) {
+                            const now = Date.now();
+                            if (db) {
+                                const transaction = db.transaction(['history'], 'readwrite');
+                                transaction.objectStore('history').put(now, currentTrackKey);
+                            }
+                            isTrackSaved = true;
+                            showNotification(statusText, true, now);
+                            console.log("YandexMusicAutoskip: Трек успешно сохранен с учетом версии:", currentTrackKey);
+                        }
+                    });
                 }
-                isTrackSaved = true;
-                showNotification(statusText, true, now);
-                console.log("YandexMusicAutoskip: Трек успешно сохранен по данным ym-bridge:", currentTrackKey);
-            }
+
+                return origPlay.apply(this, args);
+            };
+            console.log("YandexMusicAutoskip: Нативный перехват с распознаванием версий запущен.");
         } catch (e) {
-            console.error("YandexMusicAutoskip: Ошибка обработки сообщения Яндекса", e);
+            console.error("YandexMusicAutoskip: Не удалось запустить перехват версий", e);
         }
-    });
+    }
+
+    initHtml5AudioTracking();
 
     window.addEventListener('beforeunload', () => {
         if (skipTimeoutId) clearTimeout(skipTimeoutId);
