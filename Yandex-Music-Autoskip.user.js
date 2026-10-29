@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      45.1
+// @version      45.4
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -17,15 +17,16 @@
 (function() {
     'use strict';
 
-    let skipsCount = 0;
-    let currentTrackKey = null;
+    let ymSkipping = false;
     let isTrackSaved = false;
+    let skipsCount = 0;
+    let newtrackKey = null;
+    let currentTrackKey = null;
     let lastPlayedTimestamp = null;
-    let statusText = 'Трек играет впервые';
     let db = null;
     let skipTimeoutId = null;
     let notifyTimeoutId = null;
-    let ymSkipping = false;
+    let statusText = 'Трек играет впервые';
 
     const cachedKeyEvent = { key: 'n', code: 'KeyN', keyCode: 78, which: 78, bubbles: true, cancelable: true };
 
@@ -117,7 +118,7 @@
                             GM_setValue('ym_base_format_v2', true);
                             keys = null;
                             history = null;
-                            if (currentTrackKey) onTrackChanged(currentTrackKey, true);
+                            if (currentTrackKey) onTrackChanged(true);
                             return;
                         }
                         let transaction = db.transaction(['history'], 'readwrite');
@@ -208,7 +209,7 @@
                         }
                     }, 1500);
                 }
-                if (currentTrackKey) onTrackChanged(currentTrackKey, true);
+                if (currentTrackKey) onTrackChanged(true);
                 alert('Импорт завершен! Успешно восстановлено треков: ' + totalTracks);
 
             } catch (err) {
@@ -428,19 +429,7 @@
         }
     }
 
-    function simulateHumanKeyPress() {
-        const downEvent = new KeyboardEvent('keydown', cachedKeyEvent);
-        const upEvent = new KeyboardEvent('keyup', cachedKeyEvent);
-        window.dispatchEvent(downEvent);
-        setTimeout(() => {
-            window.dispatchEvent(upEvent);
-        }, Math.random() * 80 + 40);
-    }
-
     function skipTrk() {
-        skipsCount++;
-        ymSkipping = true;
-        simulateHumanKeyPress();
     }
 
     function checkAndTriggerSkip() {
@@ -452,7 +441,14 @@
             if (Math.floor((Date.now() - lastPlayedTimestamp) / 86400000) <= GM_getValue('ym_autoskip_days', 10)) {
                 let delay = skipsCount > 7 ? Math.random() * 543 + 567 : Math.random() * 321 + 345;
                 skipTimeoutId = setTimeout(() => {
-                    skipTrk();
+                    const downEvent = new KeyboardEvent('keydown', cachedKeyEvent);
+                    const upEvent = new KeyboardEvent('keyup', cachedKeyEvent);
+                    window.dispatchEvent(downEvent);
+                    setTimeout(() => {
+                        window.dispatchEvent(upEvent);
+                    }, Math.random() * 80 + 40);
+                    skipsCount++;
+                    ymSkipping = true;
                     skipTimeoutId = null;
                 }, delay);
             } else {
@@ -461,12 +457,10 @@
         }
     }
 
-    function onTrackChanged(trackKey, forceUpdate = false) {
-        if (trackKey === currentTrackKey && !forceUpdate) return;
+    function onTrackChanged(forceUpdate = false) {
+        if (newtrackKey === currentTrackKey && !forceUpdate) return;
         if (skipTimeoutId) { clearTimeout(skipTimeoutId); skipTimeoutId = null; }
-        currentTrackKey = trackKey;
-        isTrackSaved = false;
-        ymSkipping = false;
+        currentTrackKey = newtrackKey;
         if (!db) {
             statusText = 'Трек играет впервые';
             lastPlayedTimestamp = null;
@@ -474,23 +468,21 @@
             let checkDbInterval = setInterval(() => {
                 if (db) {
                     clearInterval(checkDbInterval);
-                    onTrackChanged(trackKey, true);
+                    onTrackChanged(true);
                 }
             }, 100);
             return;
         }
         let transaction = db.transaction(['history'], 'readonly');
         let store = transaction.objectStore('history');
-        let getRequest = store.get(trackKey);
+        let getRequest = store.get(newtrackKey);
         getRequest.onsuccess = function(event) {
-            if (trackKey !== currentTrackKey) return;
+            if (newtrackKey !== currentTrackKey) return;
             let lastPlay = event.target.result;
             if (lastPlay) {
                 lastPlayedTimestamp = parseInt(lastPlay, 10);
                 statusText = `Последний раз трек играл ${getRelativeTimeStr(lastPlayedTimestamp)}`;
-                if (!ymSkipping) {
-                    checkAndTriggerSkip();
-                }
+                if (!ymSkipping) checkAndTriggerSkip();
             } else {
                 statusText = 'Трек играет впервые';
                 lastPlayedTimestamp = null;
@@ -499,6 +491,48 @@
         };
     }
 
+
+    (async function() {
+        while (typeof MediaSession === 'undefined' || !navigator.mediaSession) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+        let originalMetadataSetter = Object.getOwnPropertyDescriptor(MediaSession.prototype, 'metadata').set;
+
+        Object.defineProperty(MediaSession.prototype, 'metadata', {
+            set: function(metadata) {
+                if (metadata && metadata.title) {
+                    let title = metadata.title;
+                    const artist = metadata.artist || '';
+                    const playerBar = document.querySelector('.PlayerBar, .player-controls, [class*="PlayerBar_"]');
+                    if (playerBar) {
+                        const playerVisibleText = playerBar.innerText || '';
+                        if (playerVisibleText.includes(title)) {
+                            const versionEl = playerBar.querySelector('.PlayerBar_version, .track__version, .d-track__version, [class*="version"]');
+                            if (versionEl?.innerText.trim()) {
+                                let versionText = versionEl.innerText.trim().replace(/^[\(\[](.*)[\)\]]$/, '$1').trim();
+                                if (versionText) {
+                                    const lowerVersion = versionText.toLowerCase();
+                                    const textAfterTitle = playerVisibleText.split(title)[1] || '';
+                                    const cleanRestText = textAfterTitle.trim().replace(/^[\s\n\rEe]+/, '').toLowerCase();
+                                    if (cleanRestText.startsWith(lowerVersion) && !title.toLowerCase().includes(lowerVersion)) title = `${title} (${versionText})`;
+                                }
+                            }
+                        }
+                    }
+                    newtrackKey = artist ? `${artist} — ${title}` : title;
+                    if (newtrackKey !== currentTrackKey) {
+                        onTrackChanged();
+                        isTrackSaved = false;
+                        ymSkipping = false;
+                    }
+                }
+                originalMetadataSetter.call(this, metadata);
+            },
+            configurable: true
+        });
+    })();
+
     function initHtml5AudioTracking() {
         try {
             const origPlay = HTMLAudioElement.prototype.play;
@@ -506,37 +540,12 @@
                 const audio = this;
                 if (!audio._ym_autoskip_tracked) {
                     audio._ym_autoskip_tracked = true;
-                    audio._ym_last_checked_second = -1;
                     audio.addEventListener('timeupdate', () => {
+                        if (ymSkipping || isTrackSaved || !newtrackKey) return;
                         const currentTime = audio.currentTime;
-                        const currentSecond = Math.floor(currentTime);
-                        if (audio._ym_last_checked_second === currentSecond) return;
-                        audio._ym_last_checked_second = currentSecond;
-                        if (!navigator.mediaSession || !navigator.mediaSession.metadata) return;
-                        let title = navigator.mediaSession.metadata.title;
-                        if (!title) return;
-                        const artist = navigator.mediaSession.metadata.artist || '';
-                        const playerBar = document.querySelector('.PlayerBar, .player-controls, [class*="PlayerBar_"]');
-                        if (playerBar) {
-                           const playerVisibleText = playerBar.innerText || '';
-                           if (playerVisibleText.includes(title)) {
-                               const versionEl = playerBar.querySelector('.PlayerBar_version, .track__version, .d-track__version, [class*="version"]');
-                               if (versionEl?.innerText.trim()) {
-                                   let versionText = versionEl.innerText.trim().replace(/^[\(\[](.*)[\)\]]$/, '$1').trim();
-                                   if (versionText) {
-                                       const lowerVersion = versionText.toLowerCase();
-                                       if (playerVisibleText.toLowerCase().includes(lowerVersion) && !title.toLowerCase().includes(lowerVersion)) title = `${title} (${versionText})`;
-                                   }
-                                }
-                            }
-                        }
-                        const trackKey = artist ? `${artist} — ${title}` : title;
-                        if (trackKey !== currentTrackKey) {
-                            onTrackChanged(trackKey);
-                        }
-                        if (ymSkipping || isTrackSaved) return;
+                        if (isNaN(currentTime)) return;
                         const duration = audio.duration;
-                        if (isNaN(currentTime) || isNaN(duration) || duration <= 0) return;
+                        if (isNaN(duration) || duration <= 0) return;
                         const midpoint = duration / 2;
                         if (currentTime >= midpoint && currentTime <= midpoint + 5) {
                             const now = Date.now();
