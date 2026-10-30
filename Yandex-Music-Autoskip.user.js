@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      45.11
+// @version      45.12
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -18,6 +18,7 @@
     'use strict';
 
     let isTrackSaved = false;
+    let currentTime = 0;
     let skipsCount = 0;
     let newtrackKey = null;
     let currentTrackKey = null;
@@ -428,9 +429,6 @@
         }
     }
 
-    function skipTrk() {
-    }
-
     function checkAndTriggerSkip() {
         if (skipTimeoutId) {
             clearTimeout(skipTimeoutId);
@@ -438,18 +436,19 @@
         }
         if (lastPlayedTimestamp && GM_getValue('ym_autoskip_enabled', true)) {
             if (Math.floor((Date.now() - lastPlayedTimestamp) / 86400000) <= GM_getValue('ym_autoskip_days', 10)) {
-                let delay = skipsCount > 7 ? Math.random() * 543 + 567 : Math.random() * 321 + 345;
+                let delay = skipsCount > 10 ? Math.random() * 283 + 641 : Math.random() * 127 + 164;
                 skipTimeoutId = setTimeout(() => {
                     const downEvent = new KeyboardEvent('keydown', cachedKeyEvent);
                     const upEvent = new KeyboardEvent('keyup', cachedKeyEvent);
+                    document.dispatchEvent(upEvent);
+                    window.dispatchEvent(upEvent);
                     document.dispatchEvent(downEvent);
                     window.dispatchEvent(downEvent);
                     setTimeout(() => {
                         document.dispatchEvent(upEvent);
                         window.dispatchEvent(upEvent);
-                    }, Math.random() * 30 + 30);
+                    }, Math.random() * 30 + 60);
                     skipsCount++;
-                    skipTimeoutId = null;
                 }, delay);
             } else {
                 skipsCount = 0;
@@ -459,7 +458,14 @@
 
     function onTrackChanged(forceUpdate = false) {
         if (newtrackKey === currentTrackKey && !forceUpdate) return;
-        if (skipTimeoutId) { clearTimeout(skipTimeoutId); skipTimeoutId = null; }
+        if (skipTimeoutId) {
+            clearTimeout(skipTimeoutId);
+            skipTimeoutId = null;
+        }
+        if (isNaN(currentTime) || currentTime < 0.05) {
+            setTimeout(() => onTrackChanged(true), 50);
+            return;
+        }
         if (!db) {
             statusText = 'Трек играет впервые';
             lastPlayedTimestamp = null;
@@ -472,6 +478,8 @@
             }, 100);
             return;
         }
+        currentTrackKey = newtrackKey;
+        isTrackSaved = false;
         let transaction = db.transaction(['history'], 'readonly');
         let store = transaction.objectStore('history');
         let getRequest = store.get(newtrackKey);
@@ -487,8 +495,6 @@
             }
             showNotification(statusText, false, lastPlayedTimestamp);
         };
-        currentTrackKey = newtrackKey;
-        isTrackSaved = false;
     }
 
     (async function() {
@@ -500,6 +506,7 @@
         Object.defineProperty(MediaSession.prototype, 'metadata', {
             set: function(metadata) {
                 if (metadata && metadata.title) {
+                    console.log();
                     originalMetadataSetter.call(this, metadata);
                     setTimeout(() => {
                         let title = metadata.title;
@@ -522,7 +529,10 @@
                             }
                         }
                         newtrackKey = artist ? `${artist} — ${title}` : title;
-                        if (newtrackKey !== currentTrackKey) onTrackChanged();
+                        if (newtrackKey !== currentTrackKey) {
+                            currentTime = 0;
+                            onTrackChanged();
+                        }
                     }, 0);
                 }
             },
@@ -539,7 +549,7 @@
                     audio._ym_autoskip_tracked = true;
                     audio.addEventListener('timeupdate', () => {
                         if (isTrackSaved || !newtrackKey) return;
-                        const currentTime = audio.currentTime;
+                        currentTime = audio.currentTime;
                         if (isNaN(currentTime)) return;
                         const duration = audio.duration;
                         if (isNaN(duration) || duration <= 0) return;
