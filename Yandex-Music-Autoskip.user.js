@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      45.9
+// @version      45.10
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -501,23 +501,29 @@
             set: function(metadata) {
                 if (metadata && metadata.title) {
                     originalMetadataSetter.call(this, metadata);
-                    let title = metadata.title;
-                    const artist = metadata.artist || '';
-                    const vibeTrackNameEl = document.querySelector('[class*="VibePlayerbarTrackName_trackNameText__"]');
-                    if (vibeTrackNameEl) {
-                        const domText = vibeTrackNameEl.textContent ? vibeTrackNameEl.textContent.trim() : "";
-                        if (domText && domText.toLowerCase().includes(title.toLowerCase())) title = domText;
-                    } else {
-                        let version = document.querySelector(['[class*="PageHeaderTitle_version__"]', '[class*="Meta_version__"]', ...['.PlayerBar', '.player-controls', '[class*="PlayerBar_"]'].flatMap(b => ['.PlayerBar_version', '.track__version', '.d-track__version', '[class*="version"]'].map(v => `${b} ${v}`))].join(','));
-                        if (version && version.textContent.trim()) {
-                            version = version.textContent.trim();
-                            version = version.replace(/\u00A0/g, ' ').replace(/^[\(\[](.*)[\)\]]$/, '$1').trim();
-                            const lowerVersion = version.toLowerCase();
-                            if (lowerVersion && !title.toLowerCase().includes(lowerVersion)) title = `${title} (${version})`;
+                    setTimeout(() => {
+                        let title = metadata.title;
+                        const artist = metadata.artist || '';
+                        const vibeTrackNameEl = document.querySelector('[class*="VibePlayerbarTrackName_trackNameText__"]');
+                        if (vibeTrackNameEl) {
+                            const domText = vibeTrackNameEl.textContent ? vibeTrackNameEl.textContent.trim() : "";
+                            if (domText && domText.toLowerCase().includes(title.toLowerCase())) title = domText;
+                        } else {
+                            let version = document.querySelector([
+                                '[class*="NowPlayingBlock"] [class*="Meta_version__"]',
+                                '[class*="FullscreenPlayerDesktopContent_title__"] [class*="Meta_version__"]',
+                                '[class*="PlayerBar"] [class*="Meta_version__"]',
+                                '[class*="FullscreenPlayerMobileContent_metaText__"] [class*="Meta_version__"]'
+                            ].join(', '));
+                            if (version && version.textContent.trim()) {
+                                version = version.textContent.trim().replace(/\u00A0/g, ' ').replace(/^[\(\[](.*)[\)\]]$/, '$1').trim();
+                                const lowerVersion = version.toLowerCase();
+                                if (lowerVersion && !title.toLowerCase().includes(lowerVersion)) title = `${title} (${version})`;
+                            }
                         }
-                    }
-                    newtrackKey = artist ? `${artist} — ${title}` : title;
-                    if (newtrackKey !== currentTrackKey) onTrackChanged();
+                        newtrackKey = artist ? `${artist} — ${title}` : title;
+                        if (newtrackKey !== currentTrackKey) onTrackChanged();
+                    }, 0);
                 }
             },
             configurable: true
