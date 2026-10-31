@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      45.14
+// @version      45.15
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -118,7 +118,6 @@
                             GM_setValue('ym_base_format_v2', true);
                             keys = null;
                             history = null;
-                            if (currentTrackKey) onTrackChanged(true);
                             return;
                         }
                         let transaction = db.transaction(['history'], 'readwrite');
@@ -147,6 +146,7 @@
                 return;
             }
             GM_setValue('ym_base_format_v2', true);
+            if (currentTrackKey) onTrackChanged(true);
         };
     }
 
@@ -211,7 +211,6 @@
                 }
                 if (currentTrackKey) onTrackChanged(true);
                 alert('Импорт завершен! Успешно восстановлено треков: ' + totalTracks);
-
             } catch (err) {
                 console.error('Критическая ошибка импорта:', err);
                 alert('Ошибка при импорте файла.');
@@ -435,10 +434,10 @@
             skipTimeoutId = null;
         }
         if (isNaN(currentTime) || currentTime < 0.05) {
-            setTimeout(() => checkAndTriggerSkip(), 50);
+            skipTimeoutId = setTimeout(() => checkAndTriggerSkip(), 50);
             return;
         }
-        if (lastPlayedTimestamp && GM_getValue('ym_autoskip_enabled', true)) {
+        if (lastPlayedTimestamp && GM_getValue('ym_autoskip_enabled', true) && !isTrackSaved) {
             if (Math.floor((Date.now() - lastPlayedTimestamp) / 86400000) <= GM_getValue('ym_autoskip_days', 10)) {
                 let delay = skipsCount > 10 ? Math.random() * 283 + 641 : Math.random() * 127 + 164;
                 skipTimeoutId = setTimeout(() => {
@@ -451,6 +450,7 @@
                     setTimeout(() => {
                         document.dispatchEvent(upEvent);
                         window.dispatchEvent(upEvent);
+                        skipTimeoutId = null;
                     }, Math.random() * 30 + 60);
                     skipsCount++;
                 }, delay);
@@ -532,7 +532,7 @@
                         if (newtrackKey !== currentTrackKey) {
                             currentTime = 0;
                             onTrackChanged();
-                        }
+                        } else if (!skipTimeoutId) checkAndTriggerSkip();
                     }, 0);
                 }
             },
@@ -547,9 +547,17 @@
                 const audio = this;
                 if (!audio._ym_autoskip_tracked) {
                     audio._ym_autoskip_tracked = true;
+                    let lastCheckedSecond = -1;
                     audio.addEventListener('timeupdate', () => {
                         currentTime = audio.currentTime;
-                        if (isTrackSaved || !newtrackKey || isNaN(currentTime)) return;
+                        const currentSec = Math.floor(currentTime);
+                        if (currentSec === lastCheckedSecond) return;
+                        lastCheckedSecond = currentSec;
+                        if (isTrackSaved || !newtrackKey) return;
+                        if (currentTime >= 1 && currentTime <= 5 && !skipTimeoutId) {
+                            checkAndTriggerSkip();
+                            return;
+                        }
                         const duration = audio.duration;
                         if (isNaN(duration) || duration <= 0) return;
                         const midpoint = duration / 2;
