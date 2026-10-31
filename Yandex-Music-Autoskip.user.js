@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      45.16
+// @version      45.17
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -194,9 +194,7 @@
                         console.warn('YandexMusicAutoskip: Пропущен поврежденный трек:', rawKeyInside, e);
                     }
                 }
-                if (batchIdx > 0) {
-                    writeBatchToDB(db, keysBatch, valsBatch, batchIdx);
-                }
+                if (batchIdx > 0) writeBatchToDB(db, keysBatch, valsBatch, batchIdx);
                 if (impBox) {
                     impBox.style.setProperty('border', '1px solid #00ff00', 'important');
                     impBox.style.setProperty('box-shadow', '0 0 15px #00ff00, inset 0 0 6px #00ff00', 'important');
@@ -267,9 +265,7 @@
                     chunks.push(currentChunk);
                     currentChunk = '';
                     setTimeout(() => { if (cursor) cursor.continue(); }, 0);
-                } else {
-                    cursor.continue();
-                }
+                } else cursor.continue();
             } else {
                 try {
                     if (currentChunk) chunks.push(currentChunk);
@@ -454,9 +450,7 @@
                     }, Math.random() * 30 + 60);
                     skipsCount++;
                 }, delay);
-            } else {
-                skipsCount = 0;
-            }
+            } else skipsCount = 0;
         }
     }
 
@@ -553,13 +547,9 @@
                         const currentSec = Math.floor(currentTime);
                         if (currentSec === lastCheckedSecond) return;
                         lastCheckedSecond = currentSec;
-                        if (isTrackSaved || !newtrackKey) return;
-                        if (currentTime >= 1 && currentTime <= 5 && !skipTimeoutId) {
-                            checkAndTriggerSkip();
-                            return;
-                        }
+                        if (currentTime >= 1 && currentTime <= 5 && !skipTimeoutId) checkAndTriggerSkip();
                         const duration = audio.duration;
-                        if (isNaN(duration) || duration <= 0) return;
+                        if (isNaN(duration) || duration <= 0 || isTrackSaved || !newtrackKey) return;
                         const midpoint = duration / 2;
                         if (currentTime >= midpoint && currentTime <= midpoint + 5) {
                             const now = Date.now();
@@ -580,13 +570,10 @@
     }
 
     initHtml5AudioTracking();
-
     window.addEventListener('beforeunload', () => {
         if (skipTimeoutId) clearTimeout(skipTimeoutId);
         if (notifyTimeoutId) clearTimeout(notifyTimeoutId);
     });
-
     initDatabase();
-
-    if (document.body) { createSettingsBox(); } else { window.addEventListener('DOMContentLoaded', createSettingsBox); }
+	document.body ? createSettingsBox() : window.addEventListener('DOMContentLoaded', createSettingsBox);
 })();
