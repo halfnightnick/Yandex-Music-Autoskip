@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      45.20
+// @version      46.0
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -12,6 +12,7 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @run-at       document-start
+// @grant        unsafeWindow
 // ==/UserScript==
 
 (function() {
@@ -26,6 +27,7 @@
     let db = null;
     let skipTimeoutId = null;
     let notifyTimeoutId = null;
+    let audio = null;
     let statusText = 'Трек играет впервые';
 
     const cachedKeyEvent = { key: 'n', code: 'KeyN', keyCode: 78, which: 78, bubbles: true, cancelable: true };
@@ -437,17 +439,45 @@
             if (Math.floor((Date.now() - lastPlayedTimestamp) / 86400000) <= GM_getValue('ym_autoskip_days', 10)) {
                 let delay = skipsCount > 10 ? Math.random() * 283 + 641 : Math.random() * 127 + 164;
                 skipTimeoutId = setTimeout(() => {
-                    const downEvent = new KeyboardEvent('keydown', cachedKeyEvent);
-                    const upEvent = new KeyboardEvent('keyup', cachedKeyEvent);
-                    document.dispatchEvent(upEvent);
-                    window.dispatchEvent(upEvent);
-                    document.dispatchEvent(downEvent);
-                    window.dispatchEvent(downEvent);
-                    setTimeout(() => {
-                        document.dispatchEvent(upEvent);
-                        window.dispatchEvent(upEvent);
+                    const nextButton = document.querySelector('[aria-label="Следующая песня"]') ||
+                          document.querySelector('[aria-label="Next song"]') ||
+                          document.querySelector('[aria-label="Keyingi tarona"]') ||
+                          document.querySelector('[aria-label="Келесі ән"]');
+                    if (nextButton) {
+                        nextButton.click();
                         skipTimeoutId = null;
-                    }, Math.random() * 30 + 60);
+                    } else {
+                        const forceUpEvent = new KeyboardEvent('keyup', cachedKeyEvent);
+                        const downEvent = new KeyboardEvent('keydown', cachedKeyEvent);
+                        const upEvent = new KeyboardEvent('keyup', cachedKeyEvent);
+                        window.dispatchEvent(forceUpEvent);
+                        setTimeout(() => {
+                            const trackBeforeSkip = currentTrackKey;
+                            window.dispatchEvent(downEvent);
+                            setTimeout(() => {
+                                window.dispatchEvent(upEvent);
+                                const startTime = Date.now();
+                                function checkKeySkip() {
+                                    if (trackBeforeSkip !== currentTrackKey) {
+                                        skipTimeoutId = null;
+                                        return;
+                                    }
+                                    if (Date.now() - startTime >= 120 && audio && audio.duration && audio.currentTime > 0) {
+                                        audio.currentTime = audio.duration - 0.1;
+                                        const audioStartTime = Date.now();
+                                        function checkAudioSkip() {
+                                            if (trackBeforeSkip !== currentTrackKey || (Date.now() - audioStartTime >= 400)) skipTimeoutId = null;
+                                            else requestAnimationFrame(checkAudioSkip);
+                                        }
+                                        requestAnimationFrame(checkAudioSkip);
+                                        return;
+                                    }
+                                    requestAnimationFrame(checkKeySkip);
+                                }
+                                requestAnimationFrame(checkKeySkip);
+                            }, Math.random() * 30 + 60);
+                        }, 15);
+                    }
                     skipsCount++;
                 }, delay);
             } else skipsCount = 0;
@@ -538,7 +568,7 @@
         try {
             const origPlay = HTMLAudioElement.prototype.play;
             HTMLAudioElement.prototype.play = function (...args) {
-                const audio = this;
+                audio = this;
                 if (!audio._ym_autoskip_tracked) {
                     audio._ym_autoskip_tracked = true;
                     let lastCheckedSecond = -1;
@@ -551,7 +581,7 @@
                         const duration = audio.duration;
                         if (isNaN(duration) || duration <= 0) return;
 						const midpoint = duration / 2;
-                        if (currentTime >= 1 && currentTime <= 4 && currentTime < midpoint && !skipTimeoutId) checkAndTriggerSkip();
+                        if (currentTime >= 1 && currentTime <= 6 && currentTime < midpoint && !skipTimeoutId) checkAndTriggerSkip();
                         if (currentTime >= midpoint && currentTime <= midpoint + 3) {
                             const now = Date.now();
                             if (db) {
