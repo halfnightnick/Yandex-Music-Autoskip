@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      46.1
+// @version      46.2
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -430,7 +430,7 @@
             clearTimeout(skipTimeoutId);
             skipTimeoutId = null;
         }
-        if (isNaN(currentTime) || currentTime < 0.05) {
+        if (!currentAudio || isNaN(currentTime) || currentTime < 0.05) {
             skipTimeoutId = setTimeout(() => checkAndTriggerSkip(), 50);
             return;
         }
@@ -461,11 +461,11 @@
                                         skipTimeoutId = null;
                                         return;
                                     }
-                                    if (Date.now() - startTime >= 120 && currentAudio && currentAudio.duration && currentAudio.currentTime > 0) {
+                                    if (Date.now() - startTime >= 300 && currentAudio && currentAudio.duration && currentAudio.currentTime >= 0.05 && currentAudio.currentTime < currentAudio.duration - 0.1) {
                                         currentAudio.currentTime = currentAudio.duration - 0.1;
                                         const audioStartTime = Date.now();
                                         function checkAudioSkip() {
-                                            if (trackBeforeSkip !== currentTrackKey || (Date.now() - audioStartTime >= 400)) skipTimeoutId = null;
+                                            if (trackBeforeSkip !== currentTrackKey || (Date.now() - audioStartTime >= 300)) skipTimeoutId = null;
                                             else requestAnimationFrame(checkAudioSkip);
                                         }
                                         requestAnimationFrame(checkAudioSkip);
@@ -569,7 +569,6 @@
                 const audio = this;
                 if (!audio._ym_autoskip_tracked) {
                     currentAudio = audio;
-                    audio._ym_autoskip_tracked = true;
                     let lastCheckedSecond = -1;
                     audio.addEventListener('timeupdate', () => {
                         currentTime = audio.currentTime;
@@ -581,7 +580,7 @@
                         if (isNaN(duration) || duration <= 0) return;
 						const midpoint = duration / 2;
                         if (currentTime >= 1 && currentTime <= 6 && currentTime < midpoint && !skipTimeoutId) checkAndTriggerSkip();
-                        if (currentTime >= midpoint && currentTime <= midpoint + 3) {
+                        if (currentTime >= midpoint && currentTime <= midpoint + 5) {
                             const now = Date.now();
                             if (db) {
                                 const transaction = db.transaction(['history'], 'readwrite');
@@ -591,6 +590,7 @@
                             showNotification(statusText, true, now);
                         }
                     });
+                    audio._ym_autoskip_tracked = true;
                 }
                 return origPlay.apply(this, args);
             };
