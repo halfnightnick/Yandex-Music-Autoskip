@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      46.0
+// @version      46.1
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -22,11 +22,11 @@
     let skipsCount = 0;
     let newtrackKey = null;
     let currentTrackKey = null;
+    let currentAudio = null;
     let lastPlayedTimestamp = null;
     let db = null;
     let skipTimeoutId = null;
     let notifyTimeoutId = null;
-    let audio = null;
     let statusText = 'Трек играет впервые';
 
     const cachedKeyEvent = { key: 'n', code: 'KeyN', keyCode: 78, which: 78, bubbles: true, cancelable: true };
@@ -461,8 +461,8 @@
                                         skipTimeoutId = null;
                                         return;
                                     }
-                                    if (Date.now() - startTime >= 120 && audio && audio.duration && audio.currentTime > 0) {
-                                        audio.currentTime = audio.duration - 0.1;
+                                    if (Date.now() - startTime >= 120 && currentAudio && currentAudio.duration && currentAudio.currentTime > 0) {
+                                        currentAudio.currentTime = currentAudio.duration - 0.1;
                                         const audioStartTime = Date.now();
                                         function checkAudioSkip() {
                                             if (trackBeforeSkip !== currentTrackKey || (Date.now() - audioStartTime >= 400)) skipTimeoutId = null;
@@ -529,7 +529,6 @@
         Object.defineProperty(MediaSession.prototype, 'metadata', {
             set: function(metadata) {
                 if (metadata && metadata.title) {
-                    console.log();
                     originalMetadataSetter.call(this, metadata);
                     setTimeout(() => {
                         let title = metadata.title;
@@ -567,8 +566,9 @@
         try {
             const origPlay = HTMLAudioElement.prototype.play;
             HTMLAudioElement.prototype.play = function (...args) {
-                audio = this;
+                const audio = this;
                 if (!audio._ym_autoskip_tracked) {
+                    currentAudio = audio;
                     audio._ym_autoskip_tracked = true;
                     let lastCheckedSecond = -1;
                     audio.addEventListener('timeupdate', () => {
