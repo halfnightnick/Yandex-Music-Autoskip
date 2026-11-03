@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      46.2
+// @version      46.3
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -18,10 +18,14 @@
     'use strict';
 
     let isTrackSaved = false;
+    let isReadyToCheck = false;
     let currentTime = 0;
     let skipsCount = 0;
+    let checksCount = 0;
+    let methodOfSkip = 1;
     let newtrackKey = null;
     let currentTrackKey = null;
+    let trackForSkipKey = null;
     let currentAudio = null;
     let lastPlayedTimestamp = null;
     let db = null;
@@ -208,7 +212,7 @@
                         }
                     }, 1500);
                 }
-                if (currentTrackKey && !isTrackSaved) onTrackChanged(true);
+                if (currentTrackKey) onTrackChanged(true);
                 alert('Импорт завершен! Успешно восстановлено треков: ' + totalTracks);
             } catch (err) {
                 console.error('Критическая ошибка импорта:', err);
@@ -430,61 +434,47 @@
             clearTimeout(skipTimeoutId);
             skipTimeoutId = null;
         }
+        if (!isReadyToCheck || isTrackSaved || !GM_getValue('ym_autoskip_enabled', true)) return;
         if (!currentAudio || isNaN(currentTime) || currentTime < 0.05) {
             skipTimeoutId = setTimeout(() => checkAndTriggerSkip(), 50);
             return;
         }
-        if (lastPlayedTimestamp && GM_getValue('ym_autoskip_enabled', true) && !isTrackSaved) {
-            if (Math.floor((Date.now() - lastPlayedTimestamp) / 86400000) <= GM_getValue('ym_autoskip_days', 10)) {
-                let delay = skipsCount > 10 ? Math.random() * 283 + 641 : Math.random() * 127 + 164;
-                skipTimeoutId = setTimeout(() => {
-                    const nextButton = document.querySelector('[aria-label="Следующая песня"]') ||
-                          document.querySelector('[aria-label="Next song"]') ||
-                          document.querySelector('[aria-label="Keyingi tarona"]') ||
-                          document.querySelector('[aria-label="Келесі ән"]');
-                    if (nextButton) {
-                        nextButton.click();
-                        skipTimeoutId = null;
-                    } else {
+        if (Math.floor((Date.now() - lastPlayedTimestamp) / 86400000) <= GM_getValue('ym_autoskip_days', 10)) {
+            let delay = skipsCount > 10 ? Math.random() * 283 + 641 : Math.random() * 127 + 164;
+            skipTimeoutId = setTimeout(() => {
+                if (trackForSkipKey === currentTrackKey) {
+                    methodOfSkip++;
+                    if (methodOfSkip > 3) methodOfSkip = 1;
+                } else trackForSkipKey = currentTrackKey;
+                const nextButton = document.querySelector('[aria-label="Следующая песня"]') ||
+                      document.querySelector('[aria-label="Next song"]') ||
+                      document.querySelector('[aria-label="Keyingi tarona"]') ||
+                      document.querySelector('[aria-label="Келесі ән"]');
+                if (methodOfSkip === 1 && !nextButton) methodOfSkip++
+                if (methodOfSkip === 1) nextButton.click();
+                else if (methodOfSkip === 2) {
                         const forceUpEvent = new KeyboardEvent('keyup', cachedKeyEvent);
                         const downEvent = new KeyboardEvent('keydown', cachedKeyEvent);
                         const upEvent = new KeyboardEvent('keyup', cachedKeyEvent);
                         window.dispatchEvent(forceUpEvent);
                         setTimeout(() => {
-                            const trackBeforeSkip = currentTrackKey;
                             window.dispatchEvent(downEvent);
                             setTimeout(() => {
                                 window.dispatchEvent(upEvent);
-                                const startTime = Date.now();
-                                function checkKeySkip() {
-                                    if (trackBeforeSkip !== currentTrackKey) {
-                                        skipTimeoutId = null;
-                                        return;
-                                    }
-                                    if (Date.now() - startTime >= 300 && currentAudio && currentAudio.duration && currentAudio.currentTime >= 0.05 && currentAudio.currentTime < currentAudio.duration - 0.1) {
-                                        currentAudio.currentTime = currentAudio.duration - 0.1;
-                                        const audioStartTime = Date.now();
-                                        function checkAudioSkip() {
-                                            if (trackBeforeSkip !== currentTrackKey || (Date.now() - audioStartTime >= 300)) skipTimeoutId = null;
-                                            else requestAnimationFrame(checkAudioSkip);
-                                        }
-                                        requestAnimationFrame(checkAudioSkip);
-                                        return;
-                                    }
-                                    requestAnimationFrame(checkKeySkip);
-                                }
-                                requestAnimationFrame(checkKeySkip);
                             }, Math.random() * 30 + 60);
                         }, 15);
-                    }
-                    skipsCount++;
-                }, delay);
-            } else skipsCount = 0;
-        }
+                } else currentAudio.currentTime = currentAudio.duration - 0.1;
+                skipsCount++;
+                setTimeout(() => {
+                    skipTimeoutId = null;
+                }, 300);
+            }, delay);
+        } else skipsCount = 0;
     }
 
     function onTrackChanged(forceUpdate = false) {
         if (newtrackKey === currentTrackKey && !forceUpdate) return;
+        isReadyToCheck = false;
         if (skipTimeoutId) {
             clearTimeout(skipTimeoutId);
             skipTimeoutId = null;
@@ -510,11 +500,13 @@
             let lastPlay = event.target.result;
             if (lastPlay) {
                 lastPlayedTimestamp = parseInt(lastPlay, 10);
+                isReadyToCheck = true;
                 statusText = `Последний раз трек играл ${getRelativeTimeStr(lastPlayedTimestamp)}`;
                 checkAndTriggerSkip();
             } else {
                 statusText = 'Трек играет впервые';
                 lastPlayedTimestamp = null;
+                isReadyToCheck = false;
             }
             showNotification(statusText, false, lastPlayedTimestamp);
         };
@@ -553,8 +545,9 @@
                         newtrackKey = artist ? `${artist} — ${title}` : title;
                         if (newtrackKey !== currentTrackKey) {
                             currentTime = 0;
+                            checksCount = 0;
                             onTrackChanged();
-                        } else if (!skipTimeoutId) checkAndTriggerSkip();
+                        }
                     }, 0);
                 }
             },
@@ -572,14 +565,17 @@
                     let lastCheckedSecond = -1;
                     audio.addEventListener('timeupdate', () => {
                         currentTime = audio.currentTime;
-						if (isTrackSaved || !newtrackKey) return;
+						if (isTrackSaved) return;
                         const currentSec = Math.floor(currentTime);
-                        if (currentSec === lastCheckedSecond) return;
+                        if (currentSec === lastCheckedSecond && checksCount > 15) return;
                         lastCheckedSecond = currentSec;
                         const duration = audio.duration;
                         if (isNaN(duration) || duration <= 0) return;
 						const midpoint = duration / 2;
-                        if (currentTime >= 1 && currentTime <= 6 && currentTime < midpoint && !skipTimeoutId) checkAndTriggerSkip();
+                        if (checksCount <= 15 && !skipTimeoutId) {
+                            checkAndTriggerSkip();
+                            checksCount++;
+                        }
                         if (currentTime >= midpoint && currentTime <= midpoint + 5) {
                             const now = Date.now();
                             if (db) {
