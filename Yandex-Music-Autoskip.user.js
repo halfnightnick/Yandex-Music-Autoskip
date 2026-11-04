@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yandex Music Autoskip
 // @namespace    http://tampermonkey.net/
-// @version      46.7
+// @version      46.8
 // @updateURL    https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @downloadURL  https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js
 // @description  Пользовательский скрипт для браузера, который накапливает историю прослушиваний Яндекс Музыки и автоматически скипает недавно игравшие треки, а также отображает, когда трек играл последний раз.
@@ -532,36 +532,35 @@
         let originalMetadataSetter = Object.getOwnPropertyDescriptor(MediaSession.prototype, 'metadata').set;
         Object.defineProperty(MediaSession.prototype, 'metadata', {
             set: function(metadata) {
-                if (metadata && metadata.title) {
-                    originalMetadataSetter.call(this, metadata);
-                    setTimeout(() => {
-                        let title = metadata.title;
-                        const artist = metadata.artist || '';
-                        const vibeTrackNameEl = document.querySelector('[class*="VibePlayerbarTrackName_trackNameText__"]');
-                        if (vibeTrackNameEl) {
-                            const domText = vibeTrackNameEl.textContent ? vibeTrackNameEl.textContent.trim() : "";
-                            if (domText && domText.toLowerCase().includes(title.toLowerCase())) title = domText;
-                        } else {
-                            let version = document.querySelector([
-                                '[class^="PlayerBar"] [class*="Meta_version__"]', //прогресс-бар
-                                '[class^="NowPlayingBlock"] [class*="Meta_version__"]', //текущий трек в очереди
-                                '[class*="FullscreenPlayerDesktopContent_title__"] [class*="Meta_version__"]', //текст под обложкой в полноэкранном режиме десктопной версии
-                                '[class*="FullscreenPlayerMobileContent_metaText__"] [class*="Meta_version__"]' //текст под обложкой в полноэкранном режиме мобильной версии
-                            ].join(', '));
-                            if (version && version.textContent.trim()) {
-                                version = version.textContent.replace(/^[\(\[](.*)[\)\]]$/, '$1').trim();
-                                const lowerVersion = version.toLowerCase();
-                                if (lowerVersion && !title.toLowerCase().includes(lowerVersion)) title = `${title} (${version})`;
-                            }
+                originalMetadataSetter.call(this, metadata);
+                if (!metadata || !metadata.title) return;
+                setTimeout(() => {
+                    let title = metadata.title;
+                    const artist = metadata.artist || '';
+                    const vibeTrackNameEl = document.querySelector('[class*="VibePlayerbarTrackName_trackNameText__"]');
+                    if (vibeTrackNameEl) {
+                        const domText = vibeTrackNameEl.textContent ? vibeTrackNameEl.textContent.trim() : "";
+                        if (domText && domText.toLowerCase().includes(title.toLowerCase())) title = domText;
+                    } else {
+                        let version = document.querySelector([
+                            '[class^="PlayerBar"] [class*="Meta_version__"]', //прогресс-бар
+                            '[class^="NowPlayingBlock"] [class*="Meta_version__"]', //текущий трек в очереди
+                            '[class*="FullscreenPlayerDesktopContent_title__"] [class*="Meta_version__"]', //текст под обложкой в полноэкранном режиме десктопной версии
+                            '[class*="FullscreenPlayerMobileContent_metaText__"] [class*="Meta_version__"]' //текст под обложкой в полноэкранном режиме мобильной версии
+                        ].join(', '));
+                        if (version && version.textContent.trim()) {
+                            version = version.textContent.replace(/^[\(\[](.*)[\)\]]$/, '$1').trim();
+                            const lowerVersion = version.toLowerCase();
+                            if (lowerVersion && !title.toLowerCase().includes(lowerVersion)) title = `${title} (${version})`;
                         }
-                        newtrackKey = artist ? `${artist} — ${title}` : title;
-                        if (newtrackKey !== currentTrackKey) {
-                            isReadyToCheck = false;
-                            currentTime = 0;
-                            onTrackChanged();
-                        }
-                    }, 0);
-                }
+                    }
+                    newtrackKey = artist ? `${artist} — ${title}` : title;
+                    if (newtrackKey !== currentTrackKey) {
+                        isReadyToCheck = false;
+                        currentTime = 0;
+                        onTrackChanged();
+                    }
+                }, 0);
             },
             configurable: true
         });
