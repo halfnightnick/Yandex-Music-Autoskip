@@ -28,14 +28,7 @@
   
 ## Процесс установки скрипта:
 
-1. Установите расширение Tampermonkey для вашего браузера:
-
-<a href="https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo/"><img width="160" height="50" alt="1" src="https://github.com/user-attachments/assets/35207113-c149-4d21-a57b-f925b65703d7" alt="Chrome"></a>
-<a href="https://addons.opera.com/en/extensions/details/tampermonkey-beta/"><img width="160" height="50" alt="1" src="https://github.com/user-attachments/assets/047b7d71-ce58-48c5-87c4-db3f401bbbf8" alt="Opera"></a>
-<a href="https://addons.mozilla.org/ru/firefox/addon/tampermonkey/"><img width="160" height="50" alt="1" src="https://github.com/user-attachments/assets/0bc978f9-f80f-4d4f-a112-db63924fdeda" alt="Firefox"></a>
-<a href="https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd/"><img width="160" height="50" alt="1" src="https://github.com/user-attachments/assets/e81ad0ae-4bb2-4a5d-bd89-42536246418b" alt="Edge"></a>
-<a href="https://apps.apple.com/app/tampermonkey/id1482490089/"><img width="160" height="50" alt="1" src="https://github.com/user-attachments/assets/6a8ed7fe-0ff0-42ef-b79c-c3faa2a7d5f4" alt="Safari"></a>
-
+1. Установите расширение Tampermonkey для вашего браузера.
 2. [Разрешите выполнение userscript’ов и режим разработчика](https://www.tampermonkey.net/faq.php?locale=ru#Q209) в вашем браузере.
 3. Нажмите на ссылку ниже, чтобы установить скрипт:
    <br>**[Установить скрипт](https://github.com/halfnightnick/Yandex-Music-Autoskip/raw/refs/heads/main/Yandex-Music-Autoskip.user.js)**
